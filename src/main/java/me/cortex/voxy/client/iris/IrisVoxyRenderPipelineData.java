@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectFunction;
 import kroppeb.stareval.function.FunctionReturn;
 import kroppeb.stareval.function.Type;
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IrisVoxyRenderPipeline;
 import me.cortex.voxy.client.core.rendering.util.LightMapHelper;
 import me.cortex.voxy.client.mixin.iris.CustomUniformsAccessor;
@@ -37,6 +38,7 @@ import static org.lwjgl.opengl.ARBDirectStateAccess.glBindTextureUnit;
 import static org.lwjgl.opengl.ARBUniformBufferObject.glBindBufferBase;
 import static org.lwjgl.opengl.GL33C.glBindSampler;
 import static org.lwjgl.opengl.GL43C.GL_SHADER_STORAGE_BUFFER;
+import static net.irisshaders.iris.gl.uniform.UniformUpdateFrequency.PER_FRAME;
 
 public class IrisVoxyRenderPipelineData {
     public IrisVoxyRenderPipeline thePipeline;
@@ -300,6 +302,60 @@ public class IrisVoxyRenderPipelineData {
     private record UniformWritingHolder(String name, UniformType type, Long2ObjectFunction<LongConsumer> writingFactory) {
 
     }
+
+    private static List<String> requestedUniformList(IrisShaderPatch patch) {
+        return Arrays.asList(patch.getUniformList());
+    }
+
+    private static void addCompatVoxyUniforms(IrisShaderPatch patch, Set<String> seenUniforms, List<UniformWritingHolder> uniforms) {
+        // Some shader packs request vx* uniforms through the Voxy patch JSON.
+        // On MC 1.21.1 + Iris 1.8.x these are not always emitted through the
+        // same path as newer Iris branches, so inject them directly into the
+        // generated UBO when requested.
+        final var requested = requestedUniformList(patch);
+
+        Function<Supplier<Matrix4f>, Long2ObjectFunction<LongConsumer>> mat4Writer = supplier ->
+                offset -> ptr -> supplier.get().getToAddress(ptr + offset);
+
+        if (requested.contains("vxRenderDistance") && seenUniforms.add("vxRenderDistance")) {
+            uniforms.add(new UniformWritingHolder(
+                    "vxRenderDistance",
+                    UniformType.INT,
+                    offset -> ptr -> MemoryUtil.memPutInt(ptr + offset, java.lang.Math.round(VoxyConfig.CONFIG.sectionRenderDistance * 32))
+            ));
+        }
+
+        if (requested.contains("vxViewProj") && seenUniforms.add("vxViewProj")) {
+            uniforms.add(new UniformWritingHolder("vxViewProj", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getViewProjection)));
+        }
+        if (requested.contains("vxViewProjInv") && seenUniforms.add("vxViewProjInv")) {
+            uniforms.add(new UniformWritingHolder("vxViewProjInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getViewProjection()).invert())));
+        }
+        if (requested.contains("vxViewProjPrev") && seenUniforms.add("vxViewProjPrev")) {
+            uniforms.add(new UniformWritingHolder("vxViewProjPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousViewProjection)));
+        }
+
+        if (requested.contains("vxModelView") && seenUniforms.add("vxModelView")) {
+            uniforms.add(new UniformWritingHolder("vxModelView", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getModelView)));
+        }
+        if (requested.contains("vxModelViewInv") && seenUniforms.add("vxModelViewInv")) {
+            uniforms.add(new UniformWritingHolder("vxModelViewInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getModelView()).invert())));
+        }
+        if (requested.contains("vxModelViewPrev") && seenUniforms.add("vxModelViewPrev")) {
+            uniforms.add(new UniformWritingHolder("vxModelViewPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousModelView)));
+        }
+
+        if (requested.contains("vxProj") && seenUniforms.add("vxProj")) {
+            uniforms.add(new UniformWritingHolder("vxProj", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getProjection)));
+        }
+        if (requested.contains("vxProjInv") && seenUniforms.add("vxProjInv")) {
+            uniforms.add(new UniformWritingHolder("vxProjInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getProjection()).invert())));
+        }
+        if (requested.contains("vxProjPrev") && seenUniforms.add("vxProjPrev")) {
+            uniforms.add(new UniformWritingHolder("vxProjPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousProjection)));
+        }
+    }
+
     private static List<UniformWritingHolder> createUniformSet(CustomUniforms cu, IrisShaderPatch patch) {
         //This is a fking awful hack... but it works thinks
 
@@ -406,6 +462,12 @@ public class IrisVoxyRenderPipelineData {
             }
         };
         CommonUniforms.addDynamicUniforms(uniformBuilder, FogMode.PER_FRAGMENT);
+        // Backport shim: Iris 1.8.x does not expose some newer world-state booleans
+        // expected by modern shader packs. Provide a stable default on 1.21.1.
+        if (Arrays.asList(patch.getUniformList()).contains("isPaleGarden")) {
+            uniformBuilder.uniform1i(PER_FRAME, "isPaleGarden", () -> 0);
+        }
+        addCompatVoxyUniforms(patch, seenUniforms, uniforms);
         cu.assignTo(uniformBuilder);
         cu.mapholderToPass(uniformBuilder, patch);
 

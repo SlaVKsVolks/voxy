@@ -12,6 +12,9 @@ import java.util.function.Supplier;
 import static net.irisshaders.iris.gl.uniform.UniformUpdateFrequency.PER_FRAME;
 
 public class VoxyUniforms {
+    private static final PreviousTracker PREV_VIEW_PROJ = new PreviousTracker(VoxyUniforms::getViewProjection);
+    private static final PreviousTracker PREV_MODEL_VIEW = new PreviousTracker(VoxyUniforms::getModelView);
+    private static final PreviousTracker PREV_PROJ = new PreviousTracker(VoxyUniforms::getProjection);
 
     public static Matrix4f getViewProjection() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
         var getVrs = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
@@ -42,6 +45,18 @@ public class VoxyUniforms {
             return new Matrix4f();
         }
         return new Matrix4f(mat);
+    }
+
+    public static Matrix4f getPreviousViewProjection() {
+        return PREV_VIEW_PROJ.previous();
+    }
+
+    public static Matrix4f getPreviousModelView() {
+        return PREV_MODEL_VIEW.previous();
+    }
+
+    public static Matrix4f getPreviousProjection() {
+        return PREV_PROJ.previous();
     }
 
     public static void addUniforms(UniformHolder uniforms) {
@@ -102,6 +117,21 @@ public class VoxyUniforms {
             Matrix4f previous = this.previous;
             this.previous = new Matrix4f(this.parent.get());
             return previous;
+        }
+    }
+
+    private static final class PreviousTracker {
+        private final Supplier<Matrix4f> current;
+        private Matrix4f previous = new Matrix4f();
+
+        private PreviousTracker(Supplier<Matrix4f> current) {
+            this.current = current;
+        }
+
+        private Matrix4f previous() {
+            Matrix4f out = new Matrix4f(this.previous);
+            this.previous = new Matrix4f(this.current.get());
+            return out;
         }
     }
 }
