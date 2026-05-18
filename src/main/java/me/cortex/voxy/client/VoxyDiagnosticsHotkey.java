@@ -1,8 +1,10 @@
 package me.cortex.voxy.client;
 
 import me.cortex.voxy.client.core.debug.RenderStateDiagnostics;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.common.NeoForge;
 import org.lwjgl.glfw.GLFW;
 
 public final class VoxyDiagnosticsHotkey {
@@ -17,16 +19,19 @@ public final class VoxyDiagnosticsHotkey {
             return;
         }
         initialized = true;
-        ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            long window = client.getWindow().getWindow();
-            boolean captureKeyDown = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_F8) == GLFW.GLFW_PRESS;
-            if (captureKeyDown && !captureKeyWasDown) {
-                RenderStateDiagnostics.captureNow("hotkey");
-                if (client.gui != null) {
-                    client.gui.getChat().addMessage(Component.translatable("voxy.diagnostics.capture.done"));
-                }
+        NeoForge.EVENT_BUS.addListener(VoxyDiagnosticsHotkey::onClientTick);
+    }
+
+    private static void onClientTick(ClientTickEvent.Post event) {
+        var client = Minecraft.getInstance();
+        long window = client.getWindow().getWindow();
+        boolean captureKeyDown = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_F8) == GLFW.GLFW_PRESS;
+        if (captureKeyDown && !captureKeyWasDown) {
+            RenderStateDiagnostics.captureNow("hotkey");
+            if (client.gui != null) {
+                client.gui.getChat().addMessage(Component.translatable("voxy.diagnostics.capture.done"));
             }
-            captureKeyWasDown = captureKeyDown;
-        });
+        }
+        captureKeyWasDown = captureKeyDown;
     }
 }

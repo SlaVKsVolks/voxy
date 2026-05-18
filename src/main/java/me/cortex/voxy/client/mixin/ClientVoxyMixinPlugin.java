@@ -1,6 +1,6 @@
 package me.cortex.voxy.client.mixin;
 
-import net.fabricmc.loader.api.FabricLoader;
+import net.neoforged.fml.ModList;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -12,17 +12,30 @@ import java.util.Set;
 public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     private static boolean valkyrienSkiesInstalled;
     private static boolean nvidiumInstalled;
-    private static boolean connectorInstalled = false;
+    private static boolean irisInstalled;
+    private static boolean sodiumInstalled;
 
     @Override
     public void onLoad(String mixinPackage) {
-        valkyrienSkiesInstalled = FabricLoader.getInstance().isModLoaded("valkyrienskies");
-        nvidiumInstalled = FabricLoader.getInstance().isModLoaded("nvidium");
-        connectorInstalled = FabricLoader.getInstance().isModLoaded("connector");
+        valkyrienSkiesInstalled = ModList.get().isLoaded("valkyrienskies");
+        nvidiumInstalled = ModList.get().isLoaded("nvidium");
+        irisInstalled = ModList.get().isLoaded("iris");
+        sodiumInstalled = ModList.get().isLoaded("sodium");
     }
 
     @Override
-    public boolean shouldApplyMixin(String targetClassName, String mixinClassName) { return true; }
+    public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.contains(".nvidium.")) {
+            return nvidiumInstalled;
+        }
+        if (mixinClassName.contains(".iris.")) {
+            return irisInstalled;
+        }
+        if (mixinClassName.contains(".sodium.")) {
+            return sodiumInstalled;
+        }
+        return true;
+    }
 
     @Override public List<String> getMixins() {
         List<String> mixins = new ArrayList<>();

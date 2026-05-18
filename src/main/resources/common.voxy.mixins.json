@@ -6,7 +6,8 @@
     "defaultRequire": 1
   },
   "mixins": [
-    "chunky.MixinFabricWorld",
+    "minecraft.AccessorPalettedContainer",
+    "minecraft.AccessorPalettedContainerData",
     "minecraft.MixinWorld"
   ],
   "overwrites": {

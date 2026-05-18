@@ -6,7 +6,6 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.commonImpl.VoxyCommon;
-import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -14,6 +13,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -107,11 +107,7 @@ public class Serialization {
         Map<Class<?>, GsonConfigSerialization<?>> serializers = new HashMap<>();
 
         Set<String> clazzs = new LinkedHashSet<>();
-        var modContainer = FabricLoader.getInstance().getModContainer("voxy").orElse(null);
-        if (modContainer == null || modContainer.getRootPaths().isEmpty()) {
-            throw new IllegalStateException("Unable to resolve Voxy mod container root path for config serialization scan");
-        }
-        var path = modContainer.getRootPaths().get(0);
+        var path = resolveCodeSourcePath();
         clazzs.addAll(collectAllClasses(path, BASE_SEARCH_PACKAGE));
         clazzs.addAll(collectAllClasses(BASE_SEARCH_PACKAGE));
         int count = 0;
@@ -181,6 +177,19 @@ public class Serialization {
 
         GSON = builder.create();
         Logger.info("Registered " + count + " config types");
+    }
+
+    private static Path resolveCodeSourcePath() {
+        try {
+            var source = Serialization.class.getProtectionDomain().getCodeSource();
+            if (source == null) {
+                return Path.of(".");
+            }
+            return Path.of(source.getLocation().toURI());
+        } catch (URISyntaxException e) {
+            Logger.warn("Unable to resolve Voxy code source path for config serialization scan", e);
+            return Path.of(".");
+        }
     }
 
     private static List<String> collectAllClasses(String pack) {
