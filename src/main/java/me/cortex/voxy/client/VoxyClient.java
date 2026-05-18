@@ -14,6 +14,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileLock;
 import java.nio.channels.NonWritableChannelException;
+import java.nio.file.Files;
 import java.util.HashSet;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -21,6 +22,7 @@ import java.util.function.Function;
 public class VoxyClient implements ClientModInitializer {
     private static final HashSet<String> FREX = new HashSet<>();
     private static FileLock EXCLUSIVE_LOCK;
+    private static FileOutputStream EXCLUSIVE_LOCK_STREAM;
     public static void initVoxyClient() {
         Capabilities.init();//Ensure clinit is called
 
@@ -36,15 +38,21 @@ public class VoxyClient implements ClientModInitializer {
         if (systemSupported && System.getProperty("voxy.exclusiveLock", "false").equalsIgnoreCase("true")) {
             //Try acquire the lock file
             var vf = Minecraft.getInstance().gameDirectory.toPath().resolve(".voxy");
-            if (!vf.toFile().isDirectory()) {
-                vf.toFile().mkdir();
-            }
             try {
-                FileOutputStream fis = new FileOutputStream(vf.resolve("voxy.lock").toFile());
-                EXCLUSIVE_LOCK = fis.getChannel().lock(0, Long.MAX_VALUE, false);
+                Files.createDirectories(vf);
+                EXCLUSIVE_LOCK_STREAM = new FileOutputStream(vf.resolve("voxy.lock").toFile());
+                EXCLUSIVE_LOCK = EXCLUSIVE_LOCK_STREAM.getChannel().lock(0, Long.MAX_VALUE, false);
             } catch (NonWritableChannelException | IOException e) {
                 //If some error write to log and unsupport
                 Logger.error("Failed to acquire exclusive voxy lock file, mod will be disabled");
+                if (EXCLUSIVE_LOCK_STREAM != null) {
+                    try {
+                        EXCLUSIVE_LOCK_STREAM.close();
+                    } catch (IOException closeError) {
+                        Logger.warn("Failed to close exclusive voxy lock stream after lock failure", closeError);
+                    }
+                    EXCLUSIVE_LOCK_STREAM = null;
+                }
                 systemSupported = false;
             }
 

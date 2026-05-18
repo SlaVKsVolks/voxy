@@ -86,6 +86,13 @@ public class VoxyRenderSystem {
     public void setCapturedFog(float fogStart, float fogEnd, float[] fogColor) {
         this.capturedFogStart = fogStart;
         this.capturedFogEnd = fogEnd;
+        if (fogColor == null || fogColor.length < 4) {
+            this.capturedFogColor[0] = 0f;
+            this.capturedFogColor[1] = 0f;
+            this.capturedFogColor[2] = 0f;
+            this.capturedFogColor[3] = 1f;
+            return;
+        }
         System.arraycopy(fogColor, 0, this.capturedFogColor, 0, 4);
     }
 
@@ -447,6 +454,9 @@ public class VoxyRenderSystem {
 
         //this jank is to capture the extra crap they inject like viewbobbing
         var rawMCProj = RenderSystem.getProjectionMatrix();
+        if (rawMCProj == null) {
+            return new Matrix4f(base);
+        }
         var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
         float near = getRenderDistance()<=32.0f?8f:16f;
@@ -468,11 +478,16 @@ public class VoxyRenderSystem {
             far = tmp;
         }
 
-        return extraProjection.mulLocal(
+        Matrix4f result = extraProjection.mulLocal(
                 new Matrix4f(rawMCProj)
                 .m22((properties.isZero2One()?far:(far+near)) / (near - far))
                 .m32((properties.isZero2One()?far:(far+far)) * near / (near - far))
         );
+        if (!result.isFinite()) {
+            Logger.warn("Computed non-finite Voxy projection matrix, falling back to vanilla projection");
+            return new Matrix4f(base);
+        }
+        return result;
     }
 
     private boolean frexStillHasWork() {

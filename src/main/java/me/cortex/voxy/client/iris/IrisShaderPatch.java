@@ -53,7 +53,7 @@ public class IrisShaderPatch {
                     for (var entry : json.getAsJsonArray()) {
                         var name = entry.getAsString();
                         var type = "sampler2D";
-                        if (name.matches("shadowtex")) {
+                        if (name.startsWith("shadowtex")) {
                             type = "sampler2DShadow";
                         }
                         ret.put(name, type);
@@ -62,7 +62,7 @@ public class IrisShaderPatch {
                     for (var entry : json.getAsJsonObject().entrySet()) {
                         String type = "sampler2D";
                         if (entry.getValue().isJsonNull()) {
-                            if (entry.getKey().matches("shadowtex")) {
+                            if (entry.getKey().startsWith("shadowtex")) {
                                 type = "sampler2DShadow";
                             }
                         } else {
@@ -103,6 +103,7 @@ public class IrisShaderPatch {
                 case "GL_SRC_ALPHA_SATURATE" -> GL_SRC_ALPHA_SATURATE;
                 case "GL_SRC1_COLOR" -> GL_SRC1_COLOR;
                 case "GL_ONE_MINUS_SRC1_COLOR" -> GL_ONE_MINUS_SRC1_COLOR;
+                case "GL_SRC1_ALPHA" -> GL_SRC1_ALPHA;
                 case "GL_ONE_MINUS_SRC1_ALPHA" -> GL_ONE_MINUS_SRC1_ALPHA;
                 default -> {
                     Logger.error("Unknown blend option " + type);
@@ -133,11 +134,11 @@ public class IrisShaderPatch {
                             if (str.equalsIgnoreCase("off")) {
                                 state = new BlendState(buffer, true, 0,0,0,0);
                             } else {
-                                var parts = str.split(" ");
+                                var parts = str.trim().split("\\s+");
                                 if (parts.length < 4) {
                                     state = new BlendState(buffer, true, -1, -1, -1, -1);
                                 } else {
-                                    bs = List.of(parts);
+                                    bs = List.of(parts[0], parts[1], parts[2], parts[3]);
                                 }
                             }
                         } else {
@@ -180,19 +181,6 @@ public class IrisShaderPatch {
         public boolean skipShaderDepthHackFix;
         //public boolean deferTranslucentRendering;
         public String checkValid() {
-            if (this.blending != null) {
-                int i = 0;
-                for (BlendState state : this.blending.values()) {
-                    if (state.buffer != -1 && (state.buffer<0||this.translucentDrawBuffers.length<=state.buffer)) {
-                        if (state.buffer<0) {
-                            return "Blending buffer is <0 at index: " + i;
-                        } else {
-                            return "Blending buffer index out of bounds at "+i+" was "+state.buffer+" maximum is " +(this.translucentDrawBuffers.length-1);
-                        }
-                    }
-                    i++;
-                }
-            }
             if (this.opaquePatchData == null) {
                 return "Opaque patch data is null";
             }
@@ -204,6 +192,22 @@ public class IrisShaderPatch {
             }
             if (this.translucentDrawBuffers == null) {
                 return "Translucent draw buffers are null";
+            }
+            if (this.blending != null) {
+                int i = 0;
+                for (BlendState state : this.blending.values()) {
+                    if (state == null) {
+                        return "Blending state was null at index " + i;
+                    }
+                    if (state.buffer != -1 && (state.buffer<0||this.translucentDrawBuffers.length<=state.buffer)) {
+                        if (state.buffer<0) {
+                            return "Blending buffer is <0 at index: " + i;
+                        } else {
+                            return "Blending buffer index out of bounds at "+i+" was "+state.buffer+" maximum is " +(this.translucentDrawBuffers.length-1);
+                        }
+                    }
+                    i++;
+                }
             }
             return null;
         }
@@ -240,12 +244,15 @@ public class IrisShaderPatch {
         return this.patchData.translucentPatchData;
     }
     public String getTAAShift() {
-        return this.patchData.taaOffset;// == null?"{return vec2(0.0);}":this.patchData.taaOffset;
+        return this.patchData.taaOffset == null ? "{ return vec2(0.0); }" : this.patchData.taaOffset;
     }
     public String[] getUniformList() {
         return this.patchData.uniforms;
     }
     public Object2ObjectLinkedOpenHashMap<String, String> getSamplerSet() {
+        if (this.patchData.samplers == null) {
+            return new Object2ObjectLinkedOpenHashMap<>();
+        }
         return this.patchData.samplers;
     }
 
@@ -267,7 +274,8 @@ public class IrisShaderPatch {
             return new float[]{1,1};
         }
         if (this.patchData.renderScale.length == 1) {
-            return new float[]{this.patchData.renderScale[0],this.patchData.renderScale[0]};
+            float scale = Math.max(0.01f, this.patchData.renderScale[0]);
+            return new float[]{scale, scale};
         }
         return new float[]{Math.max(0.01f,this.patchData.renderScale[0]),Math.max(0.01f,this.patchData.renderScale[1])};
     }
@@ -295,6 +303,14 @@ public class IrisShaderPatch {
             for (var entry:BS.int2ObjectEntrySet()) {
                 if (entry.getIntKey() == -1) continue;
                 final var s = entry.getValue();
+                if (s == null) {
+                    Logger.warn("Ignoring null blend state for buffer index ", entry.getIntKey());
+                    continue;
+                }
+                if (!s.off && (s.sRGB < 0 || s.dRGB < 0 || s.sA < 0 || s.dA < 0)) {
+                    Logger.warn("Ignoring invalid blend state for buffer index ", s.buffer, ": ", s);
+                    continue;
+                }
                 if (s.off) {
                     glDisablei(GL_BLEND, s.buffer);
                 } else {
@@ -433,7 +449,7 @@ public class IrisShaderPatch {
             try {
                 Files.writeString(Path.of("JSON_DUMP.txt"), voxyPatchData);
             } catch (IOException j) {
-                throw new RuntimeException(j);
+                Logger.error("Failed to write JSON_DUMP.txt after patch parse failure", j);
             }
             throw new ShaderLoadError("Failed to parse patch data gson, dumping json",e);
         }

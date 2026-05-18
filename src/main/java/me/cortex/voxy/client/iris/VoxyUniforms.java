@@ -2,6 +2,7 @@ package me.cortex.voxy.client.iris;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.common.Logger;
 import net.irisshaders.iris.gl.uniform.UniformHolder;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
@@ -12,39 +13,77 @@ import java.util.function.Supplier;
 import static net.irisshaders.iris.gl.uniform.UniformUpdateFrequency.PER_FRAME;
 
 public class VoxyUniforms {
+    private static final Matrix4f IDENTITY = new Matrix4f();
     private static final PreviousTracker PREV_VIEW_PROJ = new PreviousTracker(VoxyUniforms::getViewProjection);
     private static final PreviousTracker PREV_MODEL_VIEW = new PreviousTracker(VoxyUniforms::getModelView);
     private static final PreviousTracker PREV_PROJ = new PreviousTracker(VoxyUniforms::getProjection);
 
+    private static IGetVoxyRenderSystem getRenderSystemAccessor() {
+        var levelRenderer = Minecraft.getInstance().levelRenderer;
+        if (!(levelRenderer instanceof IGetVoxyRenderSystem accessor)) {
+            return null;
+        }
+        return accessor;
+    }
+
+    private static Matrix4f safeCopy(Matrix4fc source) {
+        Matrix4f copy = new Matrix4f(source);
+        if (!copy.isFinite()) {
+            return new Matrix4f(IDENTITY);
+        }
+        return copy;
+    }
+
+    private static Matrix4f safeInvert(Matrix4fc source) {
+        Matrix4f copy = safeCopy(source);
+        if (!copy.invert().isFinite()) {
+            return new Matrix4f(IDENTITY);
+        }
+        return copy;
+    }
+
+    private static void addUniformSafely(String name, Runnable registration) {
+        try {
+            registration.run();
+        } catch (RuntimeException ex) {
+            String msg = ex.getMessage();
+            if (msg != null && msg.contains("Already added uniform")) {
+                Logger.warn("Skipping duplicate uniform registration: ", name);
+                return;
+            }
+            throw ex;
+        }
+    }
+
     public static Matrix4f getViewProjection() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
-        var getVrs = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
+        var getVrs = getRenderSystemAccessor();
         if (getVrs == null || getVrs.voxy$getRenderSystem() == null) {
-            return new Matrix4f();
+            return new Matrix4f(IDENTITY);
         }
         var vrs = getVrs.voxy$getRenderSystem();
-        return new Matrix4f(vrs.getViewport().MVP);
+        return safeCopy(vrs.getViewport().MVP);
     }
 
     public static Matrix4f getModelView() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
-        var getVrs = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
+        var getVrs = getRenderSystemAccessor();
         if (getVrs == null || getVrs.voxy$getRenderSystem() == null) {
-            return new Matrix4f();
+            return new Matrix4f(IDENTITY);
         }
         var vrs = getVrs.voxy$getRenderSystem();
-        return new Matrix4f(vrs.getViewport().modelView);
+        return safeCopy(vrs.getViewport().modelView);
     }
 
     public static Matrix4f getProjection() {//This is 1 frame late ;-; cries, since the update occurs _before_ the voxy render pipeline
-        var getVrs = (IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer;
+        var getVrs = getRenderSystemAccessor();
         if (getVrs == null || getVrs.voxy$getRenderSystem() == null) {
-            return new Matrix4f();
+            return new Matrix4f(IDENTITY);
         }
         var vrs = getVrs.voxy$getRenderSystem();
         var mat = vrs.getViewport().projection;
         if (mat == null) {
-            return new Matrix4f();
+            return new Matrix4f(IDENTITY);
         }
-        return new Matrix4f(mat);
+        return safeCopy(mat);
     }
 
     public static Matrix4f getPreviousViewProjection() {
@@ -60,17 +99,16 @@ public class VoxyUniforms {
     }
 
     public static void addUniforms(UniformHolder uniforms) {
-        uniforms
-                .uniform1i(PER_FRAME, "vxRenderDistance", ()->Math.round(VoxyConfig.CONFIG.sectionRenderDistance*32))//In chunks
-                .uniformMatrix(PER_FRAME, "vxViewProj", VoxyUniforms::getViewProjection)
-                .uniformMatrix(PER_FRAME, "vxViewProjInv", new Inverted(VoxyUniforms::getViewProjection))
-                .uniformMatrix(PER_FRAME, "vxViewProjPrev", new PreviousMat(VoxyUniforms::getViewProjection))
-                .uniformMatrix(PER_FRAME, "vxModelView", VoxyUniforms::getModelView)
-                .uniformMatrix(PER_FRAME, "vxModelViewInv", new Inverted(VoxyUniforms::getModelView))
-                .uniformMatrix(PER_FRAME, "vxModelViewPrev", new PreviousMat(VoxyUniforms::getModelView))
-                .uniformMatrix(PER_FRAME, "vxProj", VoxyUniforms::getProjection)
-                .uniformMatrix(PER_FRAME, "vxProjInv", new Inverted(VoxyUniforms::getProjection))
-                .uniformMatrix(PER_FRAME, "vxProjPrev", new PreviousMat(VoxyUniforms::getProjection));
+        addUniformSafely("vxRenderDistance", () -> uniforms.uniform1i(PER_FRAME, "vxRenderDistance", () -> Math.round(VoxyConfig.CONFIG.sectionRenderDistance * 32)));
+        addUniformSafely("vxViewProj", () -> uniforms.uniformMatrix(PER_FRAME, "vxViewProj", VoxyUniforms::getViewProjection));
+        addUniformSafely("vxViewProjInv", () -> uniforms.uniformMatrix(PER_FRAME, "vxViewProjInv", new Inverted(VoxyUniforms::getViewProjection)));
+        addUniformSafely("vxViewProjPrev", () -> uniforms.uniformMatrix(PER_FRAME, "vxViewProjPrev", new PreviousMat(VoxyUniforms::getViewProjection)));
+        addUniformSafely("vxModelView", () -> uniforms.uniformMatrix(PER_FRAME, "vxModelView", VoxyUniforms::getModelView));
+        addUniformSafely("vxModelViewInv", () -> uniforms.uniformMatrix(PER_FRAME, "vxModelViewInv", new Inverted(VoxyUniforms::getModelView)));
+        addUniformSafely("vxModelViewPrev", () -> uniforms.uniformMatrix(PER_FRAME, "vxModelViewPrev", new PreviousMat(VoxyUniforms::getModelView)));
+        addUniformSafely("vxProj", () -> uniforms.uniformMatrix(PER_FRAME, "vxProj", VoxyUniforms::getProjection));
+        addUniformSafely("vxProjInv", () -> uniforms.uniformMatrix(PER_FRAME, "vxProjInv", new Inverted(VoxyUniforms::getProjection)));
+        addUniformSafely("vxProjPrev", () -> uniforms.uniformMatrix(PER_FRAME, "vxProjPrev", new PreviousMat(VoxyUniforms::getProjection)));
 
         /*
         if (IrisShaderPatch.IMPERSONATE_DISTANT_HORIZONS) {
@@ -94,9 +132,7 @@ public class VoxyUniforms {
         }
 
         public Matrix4fc get() {
-            Matrix4f copy = new Matrix4f(this.parent.get());
-            copy.invert();
-            return copy;
+            return safeInvert(this.parent.get());
         }
 
         public Supplier<Matrix4fc> parent() {

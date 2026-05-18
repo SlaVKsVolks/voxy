@@ -2,6 +2,7 @@ package me.cortex.voxy.client.core.util;
 
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
+import me.cortex.voxy.common.Logger;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
 import net.fabricmc.loader.api.FabricLoader;
 import net.irisshaders.iris.Iris;
@@ -45,7 +46,7 @@ public class IrisUtil {
                 Iris.reload();
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            Logger.error("Failed to reload Iris shader pipeline", e);
         }
     }
 
@@ -63,7 +64,7 @@ public class IrisUtil {
         return IRIS_INSTALLED && irisShaderPackEnabled0();
     }
     private static boolean irisShadersEnabledInConfig0() {
-        return !Iris.getCurrentPack().isEmpty();
+        return IrisApi.getInstance().getConfig().areShadersEnabled();
     }
     public static boolean irisShadersEnabledInConfig() {
         return IRIS_INSTALLED && irisShadersEnabledInConfig0();
@@ -72,6 +73,10 @@ public class IrisUtil {
         if(IRIS_INSTALLED) disableIrisShaders0();
     }
     private static void disableIrisShaders0() {
-        IrisApi.getInstance().getConfig().setShadersEnabledAndApply(false);//Disable shaders
+        try {
+            IrisApi.getInstance().getConfig().setShadersEnabledAndApply(false);//Disable shaders
+        } catch (Exception e) {
+            Logger.error("Failed to disable Iris shaders", e);
+        }
     }
 }

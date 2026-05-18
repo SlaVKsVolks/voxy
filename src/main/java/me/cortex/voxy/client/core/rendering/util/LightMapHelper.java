@@ -12,6 +12,10 @@ public class LightMapHelper {
     }
 
     public static int getLightmapTextureId() {
-        return Minecraft.getInstance().gameRenderer.lightTexture().lightTexture.getId();
+        var mc = Minecraft.getInstance();
+        if (mc == null || mc.gameRenderer == null || mc.gameRenderer.lightTexture() == null || mc.gameRenderer.lightTexture().lightTexture == null) {
+            return 0;
+        }
+        return mc.gameRenderer.lightTexture().lightTexture.getId();
     }
 }

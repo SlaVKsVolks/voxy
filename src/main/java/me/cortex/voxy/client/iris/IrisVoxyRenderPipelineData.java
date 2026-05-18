@@ -140,13 +140,13 @@ public class IrisVoxyRenderPipelineData {
     }
 
     public boolean shouldDeferTranslucency() {
-        return false;
+        return this.deferTranslucency;
     }
 
     public record StructLayout(int size, String layout, LongConsumer updater) {}
     private static StructLayout createUniformLayoutStructAndUpdater(List<UniformWritingHolder> uniforms) {
         if (uniforms.size() == 0) {
-            return null;
+            return new StructLayout(0, "{\n}", ptr -> {});
         }
 
         List<UniformWritingHolder>[] ordering = new List[]{new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>()};
@@ -269,7 +269,11 @@ public class IrisVoxyRenderPipelineData {
         } else if (uniform instanceof Float4MatrixCachedUniform f4mcu) {
             return ptr->{ptr += offset;
                 f4mcu.writeTo(ret);
-                ((Matrix4f)ret.objectReturn).getToAddress(ptr);
+                if (ret.objectReturn instanceof Matrix4fc matrix) {
+                    matrix.getToAddress(ptr);
+                } else {
+                    throw new IllegalStateException("Float4MatrixCachedUniform returned non-matrix value: " + ret.objectReturn);
+                }
             };
         } else {
             throw new IllegalStateException("Unknown uniform type " + uniform.getClass().getName());
@@ -604,7 +608,9 @@ public class IrisVoxyRenderPipelineData {
                 int sampler = ts.sampler;
                 if (sampler != -1) {
                     glBindSampler(unit, sampler);
-                }//TODO: might need to bind sampler 0
+                } else {
+                    glBindSampler(unit, 0);
+                }
             }
         };
         return new ImageSet(builder.toString(), bindingFunction);
@@ -616,14 +622,18 @@ public class IrisVoxyRenderPipelineData {
         if (ssboStore == null) return null;//If there is no store, there cannot be any ssbos
         if (ssbos.isEmpty()) return null;
         String header = "";
-        if (ssbos.containsKey(-1)) header = ssbos.remove(-1);
+        if (ssbos.containsKey(-1)) header = ssbos.get(-1);
         StringBuilder builder = new StringBuilder(header);
         builder.append("\n");
-        SSBOBinding[] bindings = new SSBOBinding[ssbos.size()];
+        int[] sortedIndices = ssbos.keySet().intStream().filter(idx -> idx != -1).sorted().toArray();
+        if (sortedIndices.length == 0) {
+            return null;
+        }
+        SSBOBinding[] bindings = new SSBOBinding[sortedIndices.length];
         int i = 0;
-        for (var entry : ssbos.int2ObjectEntrySet()) {
-            var val = entry.getValue();
-            bindings[i] = new SSBOBinding(entry.getIntKey(), i);
+        for (int index : sortedIndices) {
+            var val = ssbos.get(index);
+            bindings[i] = new SSBOBinding(index, i);
             builder.append("layout(binding = (BUFFER_BINDING_INDEX_BASE+").append(i).append(")) restrict buffer IrisBufferBinding").append(i);
             builder.append(" ").append(val).append(";\n");
             i++;
@@ -631,7 +641,12 @@ public class IrisVoxyRenderPipelineData {
         //ssboStore.getBufferIndex()
         IntConsumer bindingFunction = base->{
             for (var binding : bindings) {
-                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, base+binding.bindingOffset, ssboStore.getBufferIndex(binding.irisIndex));
+                int bufferIndex = ssboStore.getBufferIndex(binding.irisIndex);
+                if (bufferIndex <= 0) {
+                    Logger.warn("Skipping invalid SSBO binding. irisIndex=", binding.irisIndex, " buffer=", bufferIndex);
+                    continue;
+                }
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, base+binding.bindingOffset, bufferIndex);
             }
         };
         return new SSBOSet(builder.toString(), bindingFunction);

@@ -6,6 +6,7 @@ import net.minecraft.network.chat.Component;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.lang.reflect.Array;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -100,7 +101,19 @@ public class Logger {
             return "NULL";
         }
         if (obj.getClass().isArray()) {
-            return Arrays.deepToString((Object[]) obj);
+            if (obj instanceof Object[] objectArray) {
+                return Arrays.deepToString(objectArray);
+            }
+            int length = Array.getLength(obj);
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < length; i++) {
+                if (i != 0) {
+                    sb.append(", ");
+                }
+                sb.append(Array.get(obj, i));
+            }
+            sb.append(']');
+            return sb.toString();
         }
         return obj.toString();
     }

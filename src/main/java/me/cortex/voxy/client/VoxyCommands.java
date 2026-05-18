@@ -30,6 +30,24 @@ import java.util.concurrent.CompletableFuture;
 
 
 public class VoxyCommands {
+    private static net.minecraft.client.multiplayer.ClientLevel requireLevel(CommandContext<FabricClientCommandSource> ctx) {
+        var level = Minecraft.getInstance().level;
+        if (level == null) {
+            ctx.getSource().sendError(Component.translatable("You must be in a world to use this command"));
+        }
+        return level;
+    }
+
+    private static String normalizeUserPathInput(String input) {
+        String normalized = input.replace('\\', '/');
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+        return normalized;
+    }
 
     public static LiteralArgumentBuilder<FabricClientCommandSource> register() {
         var imports = ClientCommandManager.literal("import")
@@ -115,15 +133,24 @@ public class VoxyCommands {
             ctx.getSource().sendError(Component.translatable("Voxy must be enabled in settings to use this"));
             return 1;
         }
+        if (requireLevel(ctx) == null) {
+            return 1;
+        }
         var dbFile = new File(ctx.getArgument("sqlDbPath", String.class));
         if (!dbFile.exists()) {
+            ctx.getSource().sendError(Component.literal("Could not find Distant Horizons database path: " + dbFile.getAbsolutePath()));
             return 1;
         }
         if (dbFile.isDirectory()) {
             dbFile = dbFile.toPath().resolve("DistantHorizons.sqlite").toFile();
             if (!dbFile.exists()) {
+                ctx.getSource().sendError(Component.literal("Could not find DistantHorizons.sqlite in: " + dbFile.getParentFile().getAbsolutePath()));
                 return 1;
             }
+        }
+        if (!dbFile.isFile() || !dbFile.canRead()) {
+            ctx.getSource().sendError(Component.literal("Distant Horizons database is not a readable file: " + dbFile.getAbsolutePath()));
+            return 1;
         }
 
         File dbFile_ = dbFile;
@@ -134,6 +161,10 @@ public class VoxyCommands {
     }
 
     private static boolean fileBasedImporter(File directory) {
+        if (directory == null || !directory.exists() || !directory.isDirectory()) {
+            Logger.warn("Import path invalid or not a directory: ", directory);
+            return false;
+        }
         var instance = (VoxyClientInstance)VoxyCommon.getInstance();
         if (instance == null) {
             return false;
@@ -175,6 +206,7 @@ public class VoxyCommands {
     }
 
     private static CompletableFuture<Suggestions> fileDirectorySuggester(Path dir, SuggestionsBuilder sb) {
+        Path root = dir.toAbsolutePath().normalize();
         var str = sb.getRemaining().replace("\\\\", "\\").replace("\\", "/");
         if (str.startsWith("\"")) {
             str = str.substring(1);
@@ -187,18 +219,21 @@ public class VoxyCommands {
             int idx = str.lastIndexOf('/');
             remaining = str.substring(idx+1);
             try {
-                dir = dir.resolve(str.substring(0, idx));
+                dir = root.resolve(str.substring(0, idx)).normalize();
+                if (!dir.startsWith(root)) {
+                    return Suggestions.empty();
+                }
             } catch (Exception e) {
                 return Suggestions.empty();
             }
             str = str.substring(0, idx+1);
         } else {
             str = "";
+            dir = root;
         }
 
-        try {
-            var worlds = Files.list(dir).toList();
-            for (var world : worlds) {
+        try (var worlds = Files.list(dir)) {
+            for (var world : worlds.toList()) {
                 if (!world.toFile().isDirectory()) {
                     continue;
                 }
@@ -211,7 +246,9 @@ public class VoxyCommands {
                     sb.suggest(StringArgumentType.escapeIfRequired(wn));
                 }
             }
-        } catch (IOException e) {}
+        } catch (IOException e) {
+            Logger.warn("Failed to build import suggestions from ", dir, e);
+        }
 
         return sb.buildFuture();
     }
@@ -220,6 +257,9 @@ public class VoxyCommands {
     private static int importCurrentWorldIn(CommandContext<FabricClientCommandSource> ctx) {
         if (VoxyCommon.getInstance() == null) {
             ctx.getSource().sendError(Component.translatable("Voxy must be enabled in settings to use this"));
+            return 1;
+        }
+        if (requireLevel(ctx) == null) {
             return 1;
         }
 
@@ -241,13 +281,13 @@ public class VoxyCommands {
             ctx.getSource().sendError(Component.translatable("Voxy must be enabled in settings to use this"));
             return 1;
         }
-
-        var name = ctx.getArgument("world_name", String.class);
-        var file = new File("saves").toPath().resolve(name);
-        name = name.toLowerCase(Locale.ROOT);
-        if (name.endsWith("/")) {
-            name = name.substring(0, name.length()-1);
+        if (requireLevel(ctx) == null) {
+            return 1;
         }
+
+        var name = normalizeUserPathInput(ctx.getArgument("world_name", String.class));
+        var file = Minecraft.getInstance().gameDirectory.toPath().resolve("saves").resolve(name);
+        name = name.toLowerCase(Locale.ROOT);
         if (file.resolve("level.dat").toFile().exists()) {
             var dimFile = DimensionType.getStorageFolder(Minecraft.getInstance().level.dimension(), file)
                     .resolve("region")
@@ -276,11 +316,24 @@ public class VoxyCommands {
     }
 
     private static int importZip(CommandContext<FabricClientCommandSource> ctx) {
+        if (requireLevel(ctx) == null) {
+            return 1;
+        }
         var zip =  new File(ctx.getArgument("zipPath", String.class));
+        if (!zip.exists() || !zip.isFile() || !zip.canRead()) {
+            ctx.getSource().sendError(Component.literal("Zip path is not a readable file: " + zip.getAbsolutePath()));
+            return 1;
+        }
         var innerDir = "region/";
         try {
             innerDir = ctx.getArgument("innerPath", String.class);
-        } catch (Exception e) {}
+        } catch (IllegalArgumentException ignored) {
+            // Optional argument.
+        }
+        innerDir = innerDir.replace('\\', '/');
+        if (!innerDir.endsWith("/")) {
+            innerDir += "/";
+        }
 
         var instance = (VoxyClientInstance)VoxyCommon.getInstance();
         if (instance == null) {

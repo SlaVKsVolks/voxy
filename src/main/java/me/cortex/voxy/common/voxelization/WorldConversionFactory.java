@@ -1,6 +1,7 @@
 package me.cortex.voxy.common.voxelization;
 
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.common.world.other.Mipper;
 import net.caffeinemc.mods.lithium.common.world.chunk.LithiumHashPalette;
@@ -46,10 +47,18 @@ public class WorldConversionFactory {
 
     private static boolean setupLithiumLocalPallet(Palette<BlockState> vp, Reference2IntOpenHashMap<BlockState> blockCache, Mapper mapper, int[] pc)  {
         if (vp instanceof LithiumHashPalette<BlockState>) {
+            boolean readFailureLogged = false;
             for (int i = 0; i < vp.getSize(); i++) {
                 BlockState state = null;
                 int blockId = -1;
-                try { state = vp.valueFor(i); } catch (Exception e) {}
+                try {
+                    state = vp.valueFor(i);
+                } catch (Exception e) {
+                    if (!readFailureLogged) {
+                        Logger.warn("Failed to read Lithium palette value from ", vp.getClass().getSimpleName(), " (logging once)", e);
+                        readFailureLogged = true;
+                    }
+                }
                 if (state != null) {
                     blockId = blockCache.getOrDefault(state, -1);
                     if (blockId == -1) {
@@ -78,14 +87,21 @@ public class WorldConversionFactory {
                 }
                 pc[i] = blockId;
             }
-        } else if (vp instanceof HashMapPalette<BlockState> pal) {
+        } else if (vp instanceof HashMapPalette<BlockState>) {
             //var map = pal.map;
             //TODO: heavily optimize this by reading the map directly
-
+            boolean readFailureLogged = false;
             for (int i = 0; i < vp.getSize(); i++) {
                 BlockState state = null;
                 int blockId = -1;
-                try { state = vp.valueFor(i); } catch (Exception e) {}
+                try {
+                    state = vp.valueFor(i);
+                } catch (Exception e) {
+                    if (!readFailureLogged) {
+                        Logger.warn("Failed to read HashMap palette value from ", vp.getClass().getSimpleName(), " (logging once)", e);
+                        readFailureLogged = true;
+                    }
+                }
                 if (state != null) {
                     blockId = blockCache.getOrDefault(state, -1);
                     if (blockId == -1) {
@@ -191,7 +207,8 @@ public class WorldConversionFactory {
                 if (bps == null) {
                     bId = pc[Math.min((int) (sample & MSK), pcc)];
                 } else {
-                    bId = stateMapper.getIdForBlockState(bps.valueFor((int) (sample&MSK)));
+                    var state = bps.valueFor((int) (sample&MSK));
+                    bId = state == null ? 0 : stateMapper.getIdForBlockState(state);
                 }
                 sample >>>= eBits;
 

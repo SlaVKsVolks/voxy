@@ -47,11 +47,22 @@ public class Serialization {
 
 
         private T deserialize(Gson gson, JsonElement json) {
-            var retype = this.name2type.get(json.getAsJsonObject().remove(this.typeField).getAsString());
+            JsonObject obj = json.getAsJsonObject();
+            JsonElement typeElement = obj.remove(this.typeField);
+            if (typeElement == null || typeElement.isJsonNull()) {
+                throw new JsonParseException("Missing required type discriminator field: " + this.typeField);
+            }
+            var retype = this.name2type.get(typeElement.getAsString());
+            if (retype == null) {
+                throw new JsonParseException("Unknown config type discriminator: " + typeElement.getAsString());
+            }
             return gson.getDelegateAdapter(this, TypeToken.get(retype)).fromJsonTree(json);
         }
 
         private JsonElement serialize(Gson gson, T value) {
+            if (value == null) {
+                throw new JsonParseException("Cannot serialize null value for " + this.clz.getName());
+            }
             String name = this.type2name.get(value.getClass());
             if (name == null) {
                 name = "UNKNOWN_TYPE_{" + value.getClass().getName() + "}";
@@ -96,7 +107,11 @@ public class Serialization {
         Map<Class<?>, GsonConfigSerialization<?>> serializers = new HashMap<>();
 
         Set<String> clazzs = new LinkedHashSet<>();
-        var path = FabricLoader.getInstance().getModContainer("voxy").get().getRootPaths().get(0);
+        var modContainer = FabricLoader.getInstance().getModContainer("voxy").orElse(null);
+        if (modContainer == null || modContainer.getRootPaths().isEmpty()) {
+            throw new IllegalStateException("Unable to resolve Voxy mod container root path for config serialization scan");
+        }
+        var path = modContainer.getRootPaths().get(0);
         clazzs.addAll(collectAllClasses(path, BASE_SEARCH_PACKAGE));
         clazzs.addAll(collectAllClasses(BASE_SEARCH_PACKAGE));
         int count = 0;
@@ -138,7 +153,9 @@ public class Serialization {
                         try {
                             nameMethod = original.getMethod("getConfigTypeName");
                             nameMethod.setAccessible(true);
-                        } catch (NoSuchMethodException e) {}
+                        } catch (NoSuchMethodException e) {
+                            // Keep null and report below with a clear message.
+                        }
                         if (nameMethod == null) {
                             Logger.error("WARNING: Config class " + clzName + " doesnt contain a getConfigTypeName and thus wont be serializable");
                             continue outer;
@@ -167,9 +184,11 @@ public class Serialization {
     }
 
     private static List<String> collectAllClasses(String pack) {
-        try {
-            InputStream stream = Serialization.class.getClassLoader()
-                    .getResourceAsStream(pack.replaceAll("[.]", "/"));
+        try (InputStream stream = Serialization.class.getClassLoader()
+                .getResourceAsStream(pack.replaceAll("[.]", "/"))) {
+            if (stream == null) {
+                return List.of();
+            }
             BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
             return reader.lines().flatMap(inner -> {
                 if (inner.endsWith(".class")) {
@@ -189,8 +208,8 @@ public class Serialization {
         if (!Files.exists(base.resolve(pack.replaceAll("[.]", "/")))) {
             return List.of();
         }
-        try {
-            return Files.list(base.resolve(pack.replaceAll("[.]", "/"))).flatMap(inner -> {
+        try (var files = Files.list(base.resolve(pack.replaceAll("[.]", "/")))) {
+            return files.flatMap(inner -> {
                 if (inner.getFileName().toString().endsWith(".class")) {
                     return Stream.of(pack + "." + inner.getFileName().toString().replace(".class", ""));
                 } else if (Files.isDirectory(inner)) {
