@@ -14,7 +14,9 @@ import java.util.Set;
 public class MixinPackRenderTargetDirectives {
     @Redirect(method = "<clinit>", at = @At(value = "INVOKE", target = "Lcom/google/common/collect/ImmutableSet$Builder;build()Lcom/google/common/collect/ImmutableSet;"))
     private static ImmutableSet<Integer> voxy$injectExtraColourTex(ImmutableSet.Builder<Integer> builder) {
-        int limit = System.getProperty("voxy.IrisExtremeColourTexOverride", "false").equalsIgnoreCase("true")?200:20;
+        // Backport safety: some modern shader packs on Iris 1.8.x request higher
+        // colortex indices than the vanilla 0-15 range. Keep a larger default cap.
+        int limit = System.getProperty("voxy.IrisExtremeColourTexOverride", "false").equalsIgnoreCase("true") ? 200 : 64;
         for (int i = 16; i < limit; i++) {
             builder.add(i);
         }

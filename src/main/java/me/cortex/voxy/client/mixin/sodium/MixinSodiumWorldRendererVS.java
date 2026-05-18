@@ -35,9 +35,17 @@ public class MixinSodiumWorldRendererVS {
         if (renderLayer == RenderType.solid()) {
             var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).voxy$getRenderSystem();
             if (renderer != null) {
-                Viewport<?> viewport = null;
+                Viewport<?> viewport;
                 if (IrisUtil.irisShaderPackEnabled()) {
-                    viewport = renderer.getViewport();
+                    // In Iris mode, always refresh from the latest captured viewport
+                    // parameters when available so FOV/zoom projection updates are
+                    // reflected in Voxy culling this frame.
+                    var captured = IrisUtil.CAPTURED_VIEWPORT_PARAMETERS;
+                    if (captured != null) {
+                        viewport = captured.apply(renderer);
+                    } else {
+                        viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), x, y, z);
+                    }
                 } else {
                     viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), x, y, z);
                 }

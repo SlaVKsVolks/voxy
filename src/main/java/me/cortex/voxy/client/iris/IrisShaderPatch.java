@@ -311,8 +311,36 @@ public class IrisShaderPatch {
             .setLenient()
             .create();
 
+    private static String resolveFirstAvailable(
+            AbsolutePackPath baseDirectory,
+            Function<AbsolutePackPath, String> sourceProvider,
+            String... relativeCandidates
+    ) {
+        String primary = relativeCandidates.length > 0 ? relativeCandidates[0] : "";
+        for (String candidate : relativeCandidates) {
+            String source = sourceProvider.apply(baseDirectory.resolve(candidate));
+            if (source != null && !source.isBlank()) {
+                if (!candidate.equals(primary)) {
+                    Logger.info("Using fallback voxy shader patch path: " + candidate + " (primary=" + primary + ")");
+                } else {
+                    Logger.info("Using voxy shader patch path: " + candidate);
+                }
+                return source;
+            }
+        }
+        return null;
+    }
+
     public static IrisShaderPatch makePatch(ShaderPack ipack, AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider) {
-        String voxyPatchData = sourceProvider.apply(directory.resolve("voxy.json"));
+        String voxyPatchData = resolveFirstAvailable(
+                directory,
+                sourceProvider,
+                "voxy.json",
+                "program/voxy.json",
+                "world0/voxy.json",
+                "world1/voxy.json",
+                "world-1/voxy.json"
+        );
         if (voxyPatchData == null) {//No voxy patch data in shaderpack
             return null;
         }
@@ -353,18 +381,42 @@ public class IrisShaderPatch {
             }
 
             {//Inject data from the auxilery files if they are present
-                var opaque = sourceProvider.apply(directory.resolve("voxy_opaque.glsl"));
+                var opaque = resolveFirstAvailable(
+                        directory,
+                        sourceProvider,
+                        "voxy_opaque.glsl",
+                        "program/voxy_opaque.glsl",
+                        "world0/voxy_opaque.glsl",
+                        "world1/voxy_opaque.glsl",
+                        "world-1/voxy_opaque.glsl"
+                );
                 if (opaque != null) {
                     Logger.info("External opaque shader patch applied");
                     patchData.opaquePatchData = opaque;
                 }
-                var translucent = sourceProvider.apply(directory.resolve("voxy_translucent.glsl"));
+                var translucent = resolveFirstAvailable(
+                        directory,
+                        sourceProvider,
+                        "voxy_translucent.glsl",
+                        "program/voxy_translucent.glsl",
+                        "world0/voxy_translucent.glsl",
+                        "world1/voxy_translucent.glsl",
+                        "world-1/voxy_translucent.glsl"
+                );
                 if (translucent != null) {
                     Logger.info("External translucent shader patch applied");
                     patchData.translucentPatchData = translucent;
                 }
                 //This might be ok? not.. sure if is nice or not
-                var taa = sourceProvider.apply(directory.resolve("voxy_taa.glsl"));
+                var taa = resolveFirstAvailable(
+                        directory,
+                        sourceProvider,
+                        "voxy_taa.glsl",
+                        "program/voxy_taa.glsl",
+                        "world0/voxy_taa.glsl",
+                        "world1/voxy_taa.glsl",
+                        "world-1/voxy_taa.glsl"
+                );
                 if (taa != null) {
                     Logger.info("External taa shader patch applied");
                     patchData.taaOffset = taa;

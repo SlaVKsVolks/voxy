@@ -10,6 +10,7 @@ import me.cortex.voxy.client.core.gl.shader.Shader;
 import me.cortex.voxy.client.core.gl.shader.ShaderLoader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.rendering.Viewport;
+import me.cortex.voxy.client.core.debug.RenderStateDiagnostics;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
@@ -208,7 +209,8 @@ public class HierarchicalOcclusionTraverser {
 
         final float screenspaceAreaDecreasingSize = VoxyConfig.CONFIG.subDivisionSize*VoxyConfig.CONFIG.subDivisionSize;
         //Screen space size for descending
-        MemoryUtil.memPutFloat(ptr, (float) (screenspaceAreaDecreasingSize) /(viewport.width*viewport.height)); ptr += 4;
+        final float screenSpaceDescendThreshold = (float) (screenspaceAreaDecreasingSize) /(viewport.width*viewport.height);
+        MemoryUtil.memPutFloat(ptr, screenSpaceDescendThreshold); ptr += 4;
 
         setFrustum(viewport, ptr); ptr += 4*4*6;
 
@@ -217,16 +219,28 @@ public class HierarchicalOcclusionTraverser {
         //VisibilityId
         MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
 
+        int requestBudget;
         {
             final double TARGET_COUNT = 4000;//TODO: make this configurable, or at least dynamically computed based on throughput rate of mesh gen
             double iFillness = Math.max(0, (TARGET_COUNT - this.meshGen.getTaskCount()) / TARGET_COUNT);
             iFillness = Math.pow(iFillness, 2);
             final int requestSize = (int) Math.ceil(iFillness * MAX_REQUEST_QUEUE_SIZE);
-            MemoryUtil.memPutInt(ptr, Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize)));ptr += 4;
+            requestBudget = Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize));
+            MemoryUtil.memPutInt(ptr, requestBudget);ptr += 4;
         }
 
         //Put the render distance here so that it can generate a correct circle, TODO: make it not top level section sized
-        MemoryUtil.memPutFloat(ptr, (float) Math.pow(VoxyConfig.CONFIG.sectionRenderDistance*16*32,2));ptr += 4;
+        final float renderDistanceSq = (float) Math.pow(VoxyConfig.CONFIG.sectionRenderDistance*16*32,2);
+        MemoryUtil.memPutFloat(ptr, renderDistanceSq);ptr += 4;
+
+        RenderStateDiagnostics.captureTraversal(
+                "uploadUniform",
+                viewport,
+                this.topNodeCount,
+                requestBudget,
+                screenSpaceDescendThreshold,
+                renderDistanceSq
+        );
 
 
     }
@@ -367,14 +381,15 @@ public class HierarchicalOcclusionTraverser {
 
             count = (int) ((this.requestBuffer.size()>>3)-1);
 
-            //Write back the clamped count
-            MemoryUtil.memPutInt(ptr-8, count);
         }
         //if (count > REQUEST_QUEUE_SIZE) {
         //    Logger.warn("Count larger than 'maxRequestCount', overflow captured. Overflowed by " + (count-REQUEST_QUEUE_SIZE));
         //}
         if (count != 0) {
-            this.nodeManager.submitRequestBatch(new MemoryBuffer(count*8L+8).cpyFrom(ptr-8));// the -8 is because we incremented it by 8
+            var buffer = new MemoryBuffer(count*8L+8).cpyFrom(ptr-8);
+            //Write back the exact count into the new memory buffer (not the download stream buffer)
+            MemoryUtil.memPutInt(buffer.address, count);
+            this.nodeManager.submitRequestBatch(buffer);// the -8 is because we incremented it by 8
         }
     }
 

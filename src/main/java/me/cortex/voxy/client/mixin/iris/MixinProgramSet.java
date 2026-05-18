@@ -4,6 +4,7 @@ import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.client.iris.IGetVoxyPatchData;
 import me.cortex.voxy.client.iris.IrisShaderPatch;
+import me.cortex.voxy.common.Logger;
 import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.include.AbsolutePackPath;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
@@ -27,7 +28,17 @@ public class MixinProgramSet implements IGetVoxyPatchData {
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/shaderpack/programs/ProgramSet;locateDirectives()V", shift = At.Shift.BEFORE))
     private void voxy$injectPatchMaker(AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider, ShaderProperties shaderProperties, ShaderPack pack, CallbackInfo ci) {
         if (VoxyConfig.CONFIG.isRenderingEnabled() && IrisUtil.SHADER_SUPPORT) {
-            this.patchData = IrisShaderPatch.makePatch(pack, directory, sourceProvider);
+            try {
+                this.patchData = IrisShaderPatch.makePatch(pack, directory, sourceProvider);
+                if (this.patchData == null) {
+                    Logger.info("ProgramSet patch unavailable for directory=", directory);
+                } else {
+                    Logger.info("ProgramSet patch ready for directory=", directory, " uniforms=", this.patchData.getUniformList().length, " samplers=", this.patchData.getSamplerSet() == null ? 0 : this.patchData.getSamplerSet().size());
+                }
+            } catch (Throwable t) {
+                Logger.error("ProgramSet patch creation failed for directory=" + directory, t);
+                throw t;
+            }
         }
         /*
         if (this.patchData != null) {

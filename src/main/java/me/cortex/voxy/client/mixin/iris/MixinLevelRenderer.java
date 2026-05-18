@@ -39,11 +39,21 @@ public class MixinLevelRenderer {
         if (IrisUtil.irisShaderPackEnabled()) {
             var renderer = ((IGetVoxyRenderSystem) this).voxy$getRenderSystem();
             if (renderer != null) {
-                //Fixthe fucking viewport dims, fuck iris
-                glViewport(0,0,Minecraft.getInstance().getMainRenderTarget().width, Minecraft.getInstance().getMainRenderTarget().height);
+                // Keep this override opt-in. For some packs, forcing the main render target
+                // viewport here can desync with Iris target scaling and cause composition artifacts.
+                if (Boolean.getBoolean("voxy.forceMainViewportInIris")) {
+                    glViewport(0,0,Minecraft.getInstance().getMainRenderTarget().width, Minecraft.getInstance().getMainRenderTarget().height);
+                }
 
                 var pos = camera.getPosition();
-                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(new ChunkRenderMatrices(projectionMatrix, positionMatrix), pos.x, pos.y, pos.z);
+                // Capture defensive copies so downstream viewport setup never sees
+                // matrices that are mutated later in the same frame.
+                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(
+                        new ChunkRenderMatrices(new Matrix4f(projectionMatrix), new Matrix4f(positionMatrix)),
+                        pos.x,
+                        pos.y,
+                        pos.z
+                );
             }
         }
     }

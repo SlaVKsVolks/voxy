@@ -31,6 +31,9 @@ import static me.cortex.voxy.common.world.WorldEngine.UPDATE_TYPE_BLOCK_BIT;
 
 public class NodeManager {
     private static final boolean VERIFY_NODE_MANAGER_OPERATIONS = true;//VoxyCommon.isVerificationFlagOn("nodeManager");
+    private static final boolean ACCEPT_LATE_GEOMETRY_RESULTS =
+            Boolean.parseBoolean(System.getProperty("voxy.acceptLateGeometryResults", "true"));
+    private static volatile boolean lateGeometryCompatLogged = false;
     //Assumptions:
     // all nodes have children (i.e. all nodes have at least one child existence bit set at all times)
     // leaf nodes always contain geometry (empty geometry counts as geometry (it just doesnt take any memory to store))
@@ -228,13 +231,20 @@ public class NodeManager {
 
 
             //TODO: check this is ok and correct
-            if ((this.watcher.get(pos)&UPDATE_TYPE_BLOCK_BIT)==0) {
+            int watcherState = this.watcher.get(pos);
+            if ((watcherState&UPDATE_TYPE_BLOCK_BIT)==0) {
                 if (this.nodeData.isNodeGeometryInFlight(nodeId)) {
                     throw new IllegalStateException();
                 }
-                Logger.warn("Recieved geometry update but not watching it, discarding");
-                sectionResult.free();
-                return;
+                if (!ACCEPT_LATE_GEOMETRY_RESULTS) {
+                    Logger.warn("Recieved geometry update but not watching it, discarding");
+                    sectionResult.free();
+                    return;
+                }
+                if (!lateGeometryCompatLogged) {
+                    lateGeometryCompatLogged = true;
+                    Logger.warn("Accepting late geometry update for active node without watcher bit (compat path enabled)");
+                }
             }
 
             //Unmark geometry inflight

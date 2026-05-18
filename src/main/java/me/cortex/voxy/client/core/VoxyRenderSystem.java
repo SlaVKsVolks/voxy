@@ -16,6 +16,7 @@ import me.cortex.voxy.client.core.rendering.ChunkBoundRenderer;
 import me.cortex.voxy.client.core.rendering.RenderDistanceTracker;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.ViewportSelector;
+import me.cortex.voxy.client.core.debug.RenderStateDiagnostics;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.hierachical.AsyncNodeManager;
 import me.cortex.voxy.client.core.rendering.hierachical.HierarchicalOcclusionTraverser;
@@ -235,6 +236,13 @@ public class VoxyRenderSystem {
                 .setCamera(cameraX, cameraY, cameraZ)
                 .setScreenSize(width, height)
                 .update();
+
+        RenderStateDiagnostics.captureViewport(
+                "setupViewport",
+                viewport,
+                this.properties,
+                VoxyConfig.CONFIG.sectionRenderDistance
+        );
 
         if (VoxyClient.getOcclusionDebugState()==0) {
             viewport.frameId++;

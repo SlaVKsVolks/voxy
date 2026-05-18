@@ -27,11 +27,13 @@ public class RenderPipelineFactory {
     private static AbstractRenderPipeline createIrisPipeline(RenderProperties properties, AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
         var irisPipe = Iris.getPipelineManager().getPipelineNullable();
         if (irisPipe == null) {
+            Logger.warn("Iris pipeline unavailable at Voxy pipeline creation time");
             return null;
         }
         if (irisPipe instanceof IGetIrisVoxyPipelineData getVoxyPipeData) {
             var pipeData = getVoxyPipeData.voxy$getPipelineData();
             if (pipeData == null) {
+                Logger.warn("Iris pipeline is present but Voxy pipeline data is null. Falling back to NormalRenderPipeline.");
                 return null;
             }
             Logger.info("Creating voxy iris render pipeline");
@@ -43,6 +45,7 @@ public class RenderPipelineFactory {
                 return null;
             }
         }
+        Logger.warn("Iris pipeline does not expose Voxy bridge interface: " + irisPipe.getClass().getName());
         return null;
     }
 }

@@ -21,6 +21,11 @@ import static org.lwjgl.opengl.GL11C.GL_NO_ERROR;
 //System to allow reuse/recycling of render buffer/texture allocations
 // specfically the geometry buffer and texture atlas allocation
 public class RenderResourceReuse {
+    private static final long MB = 1024L * 1024L;
+    private static final int MIN_GEOMETRY_MB = 512;
+    private static final int DEFAULT_MAX_GEOMETRY_MB = 2048;
+    private static final int MAX_GEOMETRY_MB_HARD_LIMIT = 4095;
+
     private static final ArrayList<GlTexture> MODEL_TEXTURE_CACHE = new ArrayList<>();
     private static final ArrayList<GlBuffer> GEOMETRY_BUFFER_CACHE = new ArrayList<>();
 
@@ -102,7 +107,7 @@ public class RenderResourceReuse {
     }
 
     private static long getGeometryBufferSize() {
-        long geometryCapacity = Math.min((1L<<(64-Long.numberOfLeadingZeros(Capabilities.INSTANCE.ssboMaxSize-1)))<<1, 1L<<32)-1024/*(1L<<32)-1024*/;
+        long geometryCapacity = Math.min((1L << (64 - Long.numberOfLeadingZeros(Capabilities.INSTANCE.ssboMaxSize - 1))) << 1, 1L << 32) - 1024;
         if (Capabilities.INSTANCE.isIntel) {
             geometryCapacity = Math.max(geometryCapacity, 1L<<30);//intel moment, force min 1gb
         }
@@ -110,23 +115,40 @@ public class RenderResourceReuse {
             geometryCapacity = Math.min(geometryCapacity, 2000L*1024L*1024L);//nvidia linux moment, force max 2gb heap
         }
 
-        geometryCapacity = Math.max(512*1024*1024, geometryCapacity);//min of 512 mb
+        geometryCapacity = Math.max(MIN_GEOMETRY_MB * MB, geometryCapacity);//min of 512 mb
 
         //Limit to available dedicated memory if possible
         if (Capabilities.INSTANCE.canQueryGpuMemory) {
             //512mb less than avalible,
             long limit = Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - (long)(1.5*1024*1024*1024);//1.5gb vram buffer
             // Give a minimum of 512 mb requirement
-            limit = Math.max(512*1024*1024, limit);
+            limit = Math.max(MIN_GEOMETRY_MB * MB, limit);
 
             geometryCapacity = Math.min(geometryCapacity, limit);
         }
-        //geometryCapacity = 1<<28;
-        //geometryCapacity = 1<<30;//1GB test
-        var override = System.getProperty("voxy.geometryBufferSizeOverrideMB", "");
+
+        int maxGeometryMb = Integer.getInteger("voxy.geometryBufferMaxMB", DEFAULT_MAX_GEOMETRY_MB);
+        maxGeometryMb = Math.max(MIN_GEOMETRY_MB, Math.min(MAX_GEOMETRY_MB_HARD_LIMIT, maxGeometryMb));
+        geometryCapacity = Math.min(geometryCapacity, maxGeometryMb * MB);
+
+        var override = System.getProperty("voxy.geometryBufferSizeOverrideMB", "").trim();
         if (!override.isEmpty()) {
-            geometryCapacity = Long.parseLong(override)*1024L*1024L;
+            try {
+                int overrideMb = Integer.parseInt(override);
+                overrideMb = Math.max(MIN_GEOMETRY_MB, Math.min(MAX_GEOMETRY_MB_HARD_LIMIT, overrideMb));
+                geometryCapacity = overrideMb * MB;
+            } catch (NumberFormatException nfe) {
+                Logger.warn("Ignoring invalid voxy.geometryBufferSizeOverrideMB='{}'", override);
+            }
         }
+
+        Logger.info(
+                "Resolved geometry buffer size={}MB (maxMB={}, canQueryGpuMemory={}, freeDedicatedMB={})",
+                geometryCapacity / MB,
+                maxGeometryMb,
+                Capabilities.INSTANCE.canQueryGpuMemory,
+                Capabilities.INSTANCE.canQueryGpuMemory ? (Capabilities.INSTANCE.getFreeDedicatedGpuMemory() / MB) : -1
+        );
         return geometryCapacity;
     }
 }

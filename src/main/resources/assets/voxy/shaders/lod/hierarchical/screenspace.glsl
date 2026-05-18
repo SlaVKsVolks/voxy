@@ -132,8 +132,11 @@ void setupScreenspace(in UnpackedNode node) {
     _maxBB = max(max(max(p000, p100), max(p001, p101)), max(max(p010, p110), max(p011, p111)));
 
 
-    #ifdef TAA
-    vec2 taaValue = getTAA()*0.5f;//Note! this might be need tobe *0.5f
+    // Applying per-frame TAA jitter directly to culling bounds can cause
+    // temporal LoD selection oscillation on some drivers/setups.
+    // Keep culling bounds in stable screen-space by default.
+    #if defined(TAA) && defined(APPLY_TAA_TO_CULLING_BOUNDS)
+    vec2 taaValue = getTAA()*0.5f;
     _minBB.xy += taaValue;
     _maxBB.xy += taaValue;
     #endif
@@ -174,6 +177,14 @@ bool isCulledByHiz() {
     for (int x = mnbb.x; x<=mxbb.x; x++) {
         for (int y = mnbb.y; y<=mxbb.y; y++) {
             float sp = texelFetch(hizDepthSampler, ivec2(x, y), ml).r;
+            // Guard against invalid/cleared Hi-Z samples being interpreted as
+            // near occluders (forward depth path), which can produce black
+            // LoD tiles that pop in/out with camera/FOV movement.
+            #ifndef USE_REVERSE_Z
+            if (sp <= 0.0001f) {
+                sp = FAR;
+            }
+            #endif
             //pointSample2 = max(sp, pointSample2);
             //sp = mix(sp, pointSample, 0.9999999f<=sp);
             pointSample = REDUCTION(sp, pointSample);

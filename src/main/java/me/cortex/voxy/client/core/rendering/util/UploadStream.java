@@ -24,6 +24,9 @@ import static org.lwjgl.opengl.GL45C.glFlushMappedNamedBufferRange;
 
 public class UploadStream {
     public static final int BASE_ALLOCATION_ALIGNEMENT = Math.max(Capabilities.INSTANCE.ssboBindingAlignment, 16);
+    private static final int MIN_UPLOAD_STREAM_MB = 16;
+    private static final int MAX_UPLOAD_STREAM_MB = 1024;
+    private static final int DEFAULT_UPLOAD_STREAM_MB = 128;
 
     private final AllocationArena allocationArena = new AllocationArena();
     private final GlPersistentMappedBuffer uploadBuffer;
@@ -82,18 +85,25 @@ public class UploadStream {
             }
             this.caddr = this.allocationArena.alloc((int) size);//TODO: replace with allocFromLargest
             if (this.caddr == SIZE_LIMIT) {
-                //Note! we dont commit here, we only try to flush existing memory copies, we dont commit
-                // since commit is an explicit op saying we are done any to push upload everything
-                //We dont commit since we dont want to invalidate existing upload pointers
-                Logger.error("Upload stream full, preemptively committing, this could cause bad things to happen");
-                int attempts = 10;
+                Logger.error(
+                        "Upload stream full (requested={} bytes, stream={} bytes). Attempting forced commit/tick recovery.",
+                        size,
+                        this.uploadBuffer.size()
+                );
+                int attempts = 16;
                 while (--attempts != 0 && this.caddr == SIZE_LIMIT) {
-                    glFinish();
+                    this.commit();
                     this.tick(false);
+                    if ((attempts & 3) == 0) {
+                        glFinish();
+                    }
                     this.caddr = this.allocationArena.alloc((int) size);
                 }
                 if (this.caddr == SIZE_LIMIT) {
-                    throw new IllegalStateException("Could not allocate memory segment big enough for upload even after force flush");
+                    throw new IllegalStateException(
+                            "Could not allocate memory segment big enough for upload after forced recovery " +
+                                    "(requested=" + size + ", stream=" + this.uploadBuffer.size() + ")"
+                    );
                 }
             }
             this.thisFrameAllocations.add(this.caddr);
@@ -173,7 +183,24 @@ public class UploadStream {
 
     //A upload instance instead of passing one around by reference
     // MUST ONLY BE USED ON THE RENDER THREAD
-    public static final UploadStream INSTANCE = new UploadStream(1<<26);//64 mb upload buffer
+    public static final UploadStream INSTANCE = new UploadStream(resolveUploadStreamSizeBytes());
+
+    private static long resolveUploadStreamSizeBytes() {
+        int configuredMb = Integer.getInteger("voxy.uploadStreamSizeMB", DEFAULT_UPLOAD_STREAM_MB);
+        int clampedMb = Math.max(MIN_UPLOAD_STREAM_MB, Math.min(MAX_UPLOAD_STREAM_MB, configuredMb));
+        if (clampedMb != configuredMb) {
+            Logger.warn(
+                    "voxy.uploadStreamSizeMB clamped from {}MB to {}MB (allowed range {}-{}MB)",
+                    configuredMb,
+                    clampedMb,
+                    MIN_UPLOAD_STREAM_MB,
+                    MAX_UPLOAD_STREAM_MB
+            );
+        }
+        long bytes = clampedMb * 1024L * 1024L;
+        Logger.info("UploadStream initialized with {}MB ({} bytes)", clampedMb, bytes);
+        return bytes;
+    }
 
     public static long alignUp(long val, long alignment) {
         return ((val+alignment-1)/alignment)*alignment;

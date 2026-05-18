@@ -6,6 +6,7 @@ import me.cortex.voxy.client.iris.IGetIrisVoxyPipelineData;
 import me.cortex.voxy.client.iris.IGetVoxyPatchData;
 import me.cortex.voxy.client.iris.IrisShaderPatch;
 import me.cortex.voxy.client.iris.IrisVoxyRenderPipelineData;
+import me.cortex.voxy.common.Logger;
 import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
@@ -31,13 +32,30 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
     private void voxy$injectPatchDataStore(ProgramSet programSet, CallbackInfo ci) {
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = ((IGetVoxyPatchData) programSet).voxy$getPatchData();
+            if (this.patchData == null) {
+                Logger.info("IrisRenderingPipeline ctor: patchData=NULL for ProgramSet=", programSet.getClass().getName());
+            } else {
+                Logger.info("IrisRenderingPipeline ctor: patchData=READY uniforms=", this.patchData.getUniformList().length);
+            }
         }
     }
 
     @Inject(method = "<init>", at = @At(value = "INVOKE", target = "Lnet/irisshaders/iris/pipeline/IrisRenderingPipeline;createSetupComputes([Lnet/irisshaders/iris/shaderpack/programs/ComputeSource;Lnet/irisshaders/iris/shaderpack/programs/ProgramSet;Lnet/irisshaders/iris/shaderpack/texture/TextureStage;)[Lnet/irisshaders/iris/gl/program/ComputeProgram;"))
     private void voxy$injectPipeline(ProgramSet programSet, CallbackInfo ci) {
         if (this.patchData != null) {
-            this.pipeline = IrisVoxyRenderPipelineData.buildPipeline((IrisRenderingPipeline)(Object)this, this.patchData, this.customUniforms, this.shaderStorageBufferHolder);
+            try {
+                this.pipeline = IrisVoxyRenderPipelineData.buildPipeline((IrisRenderingPipeline)(Object)this, this.patchData, this.customUniforms, this.shaderStorageBufferHolder);
+                if (this.pipeline == null) {
+                    Logger.warn("IrisRenderingPipeline ctor: pipelineData=NULL after buildPipeline");
+                } else {
+                    Logger.info("IrisRenderingPipeline ctor: pipelineData=READY");
+                }
+            } catch (Throwable t) {
+                Logger.error("IrisRenderingPipeline ctor: buildPipeline failed", t);
+                throw t;
+            }
+        } else {
+            Logger.warn("IrisRenderingPipeline ctor: skipping Voxy pipeline build because patchData is null");
         }
     }
 

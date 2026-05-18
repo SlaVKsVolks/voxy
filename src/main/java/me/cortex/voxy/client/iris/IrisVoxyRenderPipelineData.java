@@ -414,7 +414,11 @@ public class IrisVoxyRenderPipelineData {
                 for (int i = 0; i < names.length; i++) {
                     if (names[i].equals(name)) {
                         if (!seenUniforms.add(name)) {
-                            throw new IllegalArgumentException("Already added uniform: " + name);
+                            // Duplicate uniform providers can happen when shader-side
+                            // custom uniform mapping overlaps with Voxy compatibility
+                            // uniforms. Keep first binding and skip duplicates.
+                            Logger.warn("Skipping duplicate dynamic uniform registration: ", name);
+                            break;
                         }
                         uniforms.add(new UniformWritingHolder(name, type, supplier));
                         break;
@@ -474,7 +478,8 @@ public class IrisVoxyRenderPipelineData {
         FunctionReturn cachedReturn = new FunctionReturn();
         ((CustomUniformsAccessor)cu).getLocationMap().get(patch).object2IntEntrySet().forEach(entry-> {
             if (!seenUniforms.add(entry.getKey().getName())) {
-                throw new IllegalArgumentException("Already added uniform: " + entry.getKey().getName());
+                Logger.warn("Skipping duplicate cached uniform registration: ", entry.getKey().getName());
+                return;
             }
             uniforms.add(new UniformWritingHolder(entry.getKey().getName(), Type.convert(entry.getKey().getType()),offset->createWriter(offset, cachedReturn, entry.getKey())));
         });
