@@ -7,6 +7,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.debug.RenderStateDiagnostics;
 import me.cortex.voxy.common.DebugUtils;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -84,7 +85,9 @@ public class VoxyCommands {
                         .executes(ctx->verifyTLNs(ctx, false))
                         .then(ClientCommandManager.argument("attemptRepair", BoolArgumentType.bool())
                                 .executes(ctx->verifyTLNs(ctx, BoolArgumentType.getBool(ctx, "attemptRepair"))))
-                );
+                )
+                .then(ClientCommandManager.literal("capture")
+                        .executes(VoxyCommands::captureDiagnostics));
 
         return ClientCommandManager.literal("voxy")//.requires((ctx)-> VoxyCommon.getInstance() != null)
                 .then(ClientCommandManager.literal("reload")
@@ -123,6 +126,12 @@ public class VoxyCommands {
             throw new IllegalStateException("How you even do this");
         }
         DebugUtils.verifyAllTopLevelNodes(WorldIdentifier.ofEngine(Minecraft.getInstance().level), attemptRepair);
+        return 0;
+    }
+
+    private static int captureDiagnostics(CommandContext<FabricClientCommandSource> ctx) {
+        RenderStateDiagnostics.captureNow("command");
+        Minecraft.getInstance().gui.getChat().addMessage(Component.translatable("voxy.diagnostics.capture.done"));
         return 0;
     }
 

@@ -1,5 +1,6 @@
 package me.cortex.voxy.client.core.debug;
 
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import net.minecraft.client.Minecraft;
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   -Dvoxy.renderstateDiagnosticsAlways=false
  */
 public final class RenderStateDiagnostics {
-    private static final boolean ENABLED = Boolean.parseBoolean(
+    private static final boolean ENABLED_PROPERTY = Boolean.parseBoolean(
             System.getProperty("voxy.renderstateDiagnostics", "false")
     );
     private static final long MIN_INTERVAL_MS = Long.getLong("voxy.renderstateDiagnosticsIntervalMs", 150L);
@@ -51,13 +52,66 @@ public final class RenderStateDiagnostics {
     private RenderStateDiagnostics() {
     }
 
+    private static boolean isRenderStateEnabled() {
+        return ENABLED_PROPERTY || VoxyConfig.CONFIG.renderStateDebug;
+    }
+
+    private static boolean isTraversalEnabled() {
+        return ENABLED_PROPERTY || VoxyConfig.CONFIG.lodCullingDebug;
+    }
+
+    private static boolean isAnyEnabled() {
+        return ENABLED_PROPERTY
+                || VoxyConfig.CONFIG.renderStateDebug
+                || VoxyConfig.CONFIG.uniformBridgeDebug
+                || VoxyConfig.CONFIG.lodCullingDebug
+                || VoxyConfig.CONFIG.depthCompositionDebug;
+    }
+
+    public static void captureNow(String trigger) {
+        if (!isAnyEnabled()) {
+            return;
+        }
+        long id = ++sequence;
+        var mc = Minecraft.getInstance();
+        StringBuilder sb = new StringBuilder(1024);
+        sb.append('{');
+        appendKv(sb, "ts", isoNow());
+        sb.append(',');
+        appendKv(sb, "type", "manual_capture");
+        sb.append(',');
+        appendKv(sb, "trigger", trigger);
+        sb.append(',');
+        appendKv(sb, "seq", id);
+        if (mc.level != null) {
+            sb.append(',');
+            appendKv(sb, "dimension", mc.level.dimension().toString());
+            sb.append(',');
+            appendKv(sb, "game_time", mc.level.getLevelData().getGameTime());
+        }
+        if (mc.player != null) {
+            sb.append(',');
+            appendKv(sb, "camera_x", mc.player.getX());
+            sb.append(',');
+            appendKv(sb, "camera_y", mc.player.getY());
+            sb.append(',');
+            appendKv(sb, "camera_z", mc.player.getZ());
+            sb.append(',');
+            appendKv(sb, "camera_yaw", mc.player.getYRot());
+            sb.append(',');
+            appendKv(sb, "camera_pitch", mc.player.getXRot());
+        }
+        sb.append('}');
+        writeLine(sb.toString());
+    }
+
     public static void captureViewport(
             String stage,
             Viewport<?> viewport,
             RenderProperties properties,
             float configuredSectionRenderDistance
     ) {
-        if (!ENABLED || viewport == null) {
+        if (!isRenderStateEnabled() || viewport == null) {
             return;
         }
 
@@ -149,7 +203,7 @@ public final class RenderStateDiagnostics {
             float screenSpaceDescendThreshold,
             float renderDistanceSq
     ) {
-        if (!ENABLED || viewport == null) {
+        if (!isTraversalEnabled() || viewport == null) {
             return;
         }
 

@@ -37,6 +37,10 @@ public class VoxyConfig {
     public boolean adaptCloudDistance = true;
     public int cloudDistance = 0;
     public boolean dontUseSodiumBuilderThreads = false;
+    public boolean renderStateDebug = false;
+    public boolean uniformBridgeDebug = false;
+    public boolean lodCullingDebug = false;
+    public boolean depthCompositionDebug = false;
 
     public String ssaoMode;
 

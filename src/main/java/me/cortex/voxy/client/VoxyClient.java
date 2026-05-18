@@ -73,6 +73,8 @@ public class VoxyClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        VoxyDiagnosticsHotkey.init();
+
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
             if (VoxyCommon.isAvailable()) {
                 dispatcher.register(VoxyCommands.register());
