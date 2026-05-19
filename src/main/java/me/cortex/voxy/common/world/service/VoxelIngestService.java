@@ -23,20 +23,9 @@ import org.jetbrains.annotations.NotNull;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 public class VoxelIngestService {
-    private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
     private final Service service;
     private interface IngestTask {
         void process();
-    }
-    private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunkSection section, DataLayer blockLight, DataLayer skyLight) implements IngestTask {
-        @Override
-        public void process() {
-            world.markActive();
-
-            var vs = SECTION_CACHE.get().setPosition(cx, cy, cz);
-            VoxelizedSection update = buildUpdate(world, section, cx, cy, cz, blockLight, skyLight, vs);
-            WorldUpdater.insertUpdate(world, update);
-        }
     }
     private record IngestVoxelized(WorldEngine world, VoxelizedSection section) implements IngestTask {
         @Override
@@ -80,11 +69,6 @@ public class VoxelIngestService {
         );
         WorldVoxilizedSectionMipper.mipSection(csec, world.getMapper());
         return csec;
-    }
-
-    @NotNull
-    private static ILightingSupplier getLightingSupplier(IngestSection task) {
-        return getLightingSupplier(task.section, task.blockLight, task.skyLight);
     }
 
     @NotNull
@@ -155,11 +139,7 @@ public class VoxelIngestService {
                 i++;
                 if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
                 engine.markActive();
-                this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, null, null));
-                try {
-                    this.service.execute();
-                } catch (Exception e) {
-                    Logger.error("Executing had an error: assume shutting down, aborting",e);
+                if (!this.snapshotAndQueue("chunk_empty_column", engine, section, chunk.getPos().x, i, chunk.getPos().z, null, null)) {
                     break;
                 }
             }
@@ -195,11 +175,7 @@ public class VoxelIngestService {
             //    continue;
             //}
             engine.markActive();
-            this.ingestQueue.add(new IngestSection(chunk.getPos().x, i, chunk.getPos().z, engine, section, bl, sl));//TODO: fixme, this is technically not safe todo on the chunk load ingest, we need to copy the section data so it cant be modified while being read
-            try {
-                this.service.execute();
-            } catch (Exception e) {
-                Logger.error("Executing had an error: assume shutting down, aborting",e);
+            if (!this.snapshotAndQueue("chunk_load", engine, section, chunk.getPos().x, i, chunk.getPos().z, bl, sl)) {
                 break;
             }
         }
@@ -230,13 +206,13 @@ public class VoxelIngestService {
         return tryIngestChunk(WorldIdentifier.of(chunk.getLevel()), chunk);
     }
 
-    private boolean rawIngest0(WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
+    private boolean snapshotAndQueue(String stage, WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
         VoxelizedSection snapshot;
         try {
             snapshot = buildUpdate(engine, section, x, y, z, bl, sl, VoxelizedSection.createEmpty()).copy();
         } catch (Exception e) {
-            RenderCorrectnessDiagnostics.ingest("raw_snapshot_failed", x, y, z, false, false, e.getClass().getSimpleName());
-            Logger.error("Failed to snapshot raw Voxy ingest section", x, y, z, e);
+            RenderCorrectnessDiagnostics.ingest(stage + "_snapshot_failed", x, y, z, false, false, e.getClass().getSimpleName());
+            Logger.error("Failed to snapshot Voxy ingest section", x, y, z, e);
             return false;
         }
 
@@ -244,13 +220,17 @@ public class VoxelIngestService {
         this.ingestQueue.add(new IngestVoxelized(engine, snapshot));
         try {
             this.service.execute();
-            RenderCorrectnessDiagnostics.ingest("raw_snapshot", x, y, z, sectionAir, true, "queued");
+            RenderCorrectnessDiagnostics.ingest(stage, x, y, z, sectionAir, true, "queued");
             return true;
         } catch (Exception e) {
-            RenderCorrectnessDiagnostics.ingest("raw_snapshot_execute_failed", x, y, z, sectionAir, false, e.getClass().getSimpleName());
+            RenderCorrectnessDiagnostics.ingest(stage + "_execute_failed", x, y, z, sectionAir, false, e.getClass().getSimpleName());
             Logger.error("Executing had an error: assume shutting down, aborting",e);
             return false;
         }
+    }
+
+    private boolean rawIngest0(WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
+        return this.snapshotAndQueue("raw_snapshot", engine, section, x, y, z, bl, sl);
     }
 
     public static boolean rawIngest(WorldIdentifier id, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {

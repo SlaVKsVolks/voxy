@@ -44,7 +44,7 @@ public final class RenderCorrectnessDiagnostics {
             boolean queued,
             String reason
     ) {
-        if (queued) {
+        if (queued && "sodium_upload".equals(stage)) {
             uploadIngestTotal.increment();
             if (sectionAir) {
                 uploadIngestZeroTotal.increment();
