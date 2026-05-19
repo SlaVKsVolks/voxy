@@ -11,6 +11,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.rocksdb.*;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,6 +21,8 @@ import java.util.List;
 import java.util.function.LongConsumer;
 
 public class RocksDBStorageBackend extends StorageBackend {
+    private static final String RECOVER_ON_OPEN_FAILURE_PROPERTY = "voxy.rocksdbRecoverOnOpenFailure";
+
     private final RocksDB db;
     private final ColumnFamilyHandle worldSections;
     private final ColumnFamilyHandle idMappings;
@@ -54,6 +57,38 @@ public class RocksDBStorageBackend extends StorageBackend {
          */
         RocksDB.loadLibrary();
 
+        OpenedDb openedDb;
+        try {
+            openedDb = openDb(path);
+        } catch (RocksDBException firstFailure) {
+            if (!Boolean.parseBoolean(System.getProperty(RECOVER_ON_OPEN_FAILURE_PROPERTY, "true"))) {
+                throw new RuntimeException(firstFailure);
+            }
+
+            Path quarantinedPath = quarantineCorruptDb(path, firstFailure);
+            try {
+                openedDb = openDb(path);
+            } catch (RocksDBException secondFailure) {
+                secondFailure.addSuppressed(firstFailure);
+                throw new RuntimeException("Unable to reopen Voxy RocksDB after quarantining corrupt cache at " + quarantinedPath, secondFailure);
+            }
+        }
+
+        this.db = openedDb.db;
+        this.sectionReadOps = openedDb.sectionReadOps;
+        this.sectionWriteOps = openedDb.sectionWriteOps;
+        this.worldSections = openedDb.worldSections;
+        this.idMappings = openedDb.idMappings;
+        this.closeList.addAll(openedDb.closeList);
+
+        try {
+            this.db.flushWal(true);
+        } catch (RocksDBException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static OpenedDb openDb(String path) throws RocksDBException {
         //TODO: FIXME: DONT USE THE SAME options PER COLUMN FAMILY
         final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
                 .setCompressionType(CompressionType.ZSTD_COMPRESSION)
@@ -77,9 +112,9 @@ public class RocksDBStorageBackend extends StorageBackend {
         );
 
         final List<ColumnFamilyDescriptor> cfDescriptors = Arrays.asList(
-            new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts),
-            new ColumnFamilyDescriptor("world_sections".getBytes(), cfWorldSecOpts),
-            new ColumnFamilyDescriptor("id_mappings".getBytes(), cfOpts)
+                new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts),
+                new ColumnFamilyDescriptor("world_sections".getBytes(), cfWorldSecOpts),
+                new ColumnFamilyDescriptor("id_mappings".getBytes(), cfOpts)
         );
 
         final DBOptions options = new DBOptions()
@@ -93,31 +128,62 @@ public class RocksDBStorageBackend extends StorageBackend {
         List<ColumnFamilyHandle> handles = new ArrayList<>();
 
         try {
+            RocksDB db = RocksDB.open(options, path, cfDescriptors, handles);
+            ReadOptions sectionReadOps = new ReadOptions();
+            WriteOptions sectionWriteOps = new WriteOptions();
 
-            this.db = RocksDB.open(options,
-                    path, cfDescriptors,
-                    handles);
+            var closeList = new ArrayList<AbstractImmutableNativeReference>();
+            closeList.add(options);
+            closeList.add(cfOpts);
+            closeList.add(cfWorldSecOpts);
+            closeList.add(sectionReadOps);
+            closeList.add(sectionWriteOps);
+            closeList.add(filter);
+            closeList.add(bCache);
+            closeList.addAll(handles);
 
-            this.sectionReadOps = new ReadOptions();
-            this.sectionWriteOps = new WriteOptions();
-
-            this.closeList.add(options);
-            this.closeList.add(cfOpts);
-            this.closeList.add(cfWorldSecOpts);
-            this.closeList.add(this.sectionReadOps);
-            this.closeList.add(this.sectionWriteOps);
-            this.closeList.add(filter);
-            this.closeList.add(bCache);
-            this.closeList.addAll(handles);
-
-            this.worldSections = handles.get(1);
-            this.idMappings = handles.get(2);
-
-            this.db.flushWal(true);
+            return new OpenedDb(db, handles.get(1), handles.get(2), sectionReadOps, sectionWriteOps, closeList);
         } catch (RocksDBException e) {
-            throw new RuntimeException(e);
+            closeNativeReferences(handles);
+            closeNativeReferences(List.of(options, cfOpts, cfWorldSecOpts, filter, bCache));
+            throw e;
         }
     }
+
+    private static Path quarantineCorruptDb(String path, RocksDBException cause) {
+        Path dbPath = Path.of(path);
+        Path quarantinePath = dbPath.resolveSibling(dbPath.getFileName() + ".corrupt-" + Long.toUnsignedString(System.currentTimeMillis()));
+        try {
+            Files.createDirectories(dbPath.getParent());
+            if (Files.exists(dbPath)) {
+                Files.move(dbPath, quarantinePath);
+                System.err.println("[Voxy] RocksDB open failed; moved corrupt LoD cache to " + quarantinePath + " and will recreate it. Cause: " + cause.getMessage());
+            } else {
+                System.err.println("[Voxy] RocksDB open failed before cache directory existed; retrying with a fresh cache. Cause: " + cause.getMessage());
+            }
+            return quarantinePath;
+        } catch (IOException moveFailure) {
+            moveFailure.addSuppressed(cause);
+            throw new RuntimeException("Unable to quarantine corrupt Voxy RocksDB cache at " + dbPath, moveFailure);
+        }
+    }
+
+    private static void closeNativeReferences(List<? extends AbstractImmutableNativeReference> references) {
+        for (var reference : references.reversed()) {
+            if (reference != null) {
+                reference.close();
+            }
+        }
+    }
+
+    private record OpenedDb(
+            RocksDB db,
+            ColumnFamilyHandle worldSections,
+            ColumnFamilyHandle idMappings,
+            ReadOptions sectionReadOps,
+            WriteOptions sectionWriteOps,
+            List<AbstractImmutableNativeReference> closeList
+    ) {}
 
     @Override
     public void iteratePositions(int level, LongConsumer consumer) {
