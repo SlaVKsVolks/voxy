@@ -19,9 +19,14 @@ public final class RenderCorrectnessDiagnostics {
     private static final Path OUTPUT_FILE = Path.of(
             System.getProperty("voxy.renderCorrectnessDiagnosticsFile", "testharness/voxy_render_correctness.ndjson")
     );
+    private static final Path PROBE_TARGET_FILE = Path.of(
+            System.getProperty("voxy.renderCorrectnessProbeTargetFile", "testharness/voxy_gate_a_target_section.json")
+    );
 
     private static final AtomicBoolean initLogged = new AtomicBoolean(false);
     private static final AtomicBoolean ioFailureLogged = new AtomicBoolean(false);
+    private static volatile ProbeTarget probeTarget;
+    private static volatile long probeTargetLastModified = Long.MIN_VALUE;
 
     public static final LongAdder uploadIngestTotal = new LongAdder();
     public static final LongAdder uploadIngestZeroTotal = new LongAdder();
@@ -31,6 +36,8 @@ public final class RenderCorrectnessDiagnostics {
     public static final LongAdder chunkBoundRemove = new LongAdder();
     public static final LongAdder depthGuardSkips = new LongAdder();
     public static final LongAdder projectionGuardSkips = new LongAdder();
+    public static final LongAdder probeMatchedIngestTotal = new LongAdder();
+    public static final LongAdder probeMatchedZeroIngestTotal = new LongAdder();
 
     private RenderCorrectnessDiagnostics() {
     }
@@ -76,9 +83,20 @@ public final class RenderCorrectnessDiagnostics {
         if (!ENABLED) {
             return;
         }
+        ProbeTarget target = probeTarget();
+        boolean probeMatch = target != null && target.matches(x, y, z);
+        if (probeMatch && "ingest".equals(type)) {
+            probeMatchedIngestTotal.increment();
+            if (flag) {
+                probeMatchedZeroIngestTotal.increment();
+            }
+        }
         writeLine("{\"ts\":\"" + escape(isoNow()) + "\",\"type\":\"" + escape(type) + "\",\"stage\":\"" + escape(stage)
                 + "\",\"x\":" + x + ",\"y\":" + y + ",\"z\":" + z
-                + ",\"flag\":" + flag + ",\"result\":" + result + ",\"reason\":\"" + escape(reason) + "\"}");
+                + ",\"flag\":" + flag + ",\"result\":" + result
+                + ",\"probe_id\":\"" + escape(target == null ? "" : target.probeId()) + "\""
+                + ",\"probe_section_match\":" + probeMatch
+                + ",\"reason\":\"" + escape(reason) + "\"}");
     }
 
     private static void event(String type, String stage, long value, String key, String reason) {
@@ -134,6 +152,82 @@ public final class RenderCorrectnessDiagnostics {
             if (ioFailureLogged.compareAndSet(false, true)) {
                 Logger.error("Render correctness diagnostics write failure", ioe);
             }
+        }
+    }
+
+    private static ProbeTarget probeTarget() {
+        try {
+            if (!Files.exists(PROBE_TARGET_FILE)) {
+                probeTarget = null;
+                probeTargetLastModified = Long.MIN_VALUE;
+                return null;
+            }
+            long modified = Files.getLastModifiedTime(PROBE_TARGET_FILE).toMillis();
+            ProbeTarget current = probeTarget;
+            if (current != null && modified == probeTargetLastModified) {
+                return current;
+            }
+            String json = Files.readString(PROBE_TARGET_FILE, StandardCharsets.UTF_8);
+            ProbeTarget parsed = new ProbeTarget(
+                    extractString(json, "probe_id"),
+                    extractInt(json, "section_x"),
+                    extractInt(json, "section_y"),
+                    extractInt(json, "section_z")
+            );
+            probeTarget = parsed;
+            probeTargetLastModified = modified;
+            return parsed;
+        } catch (Exception ignored) {
+            return probeTarget;
+        }
+    }
+
+    private static String extractString(String json, String key) {
+        String needle = "\"" + key + "\"";
+        int keyIndex = json.indexOf(needle);
+        if (keyIndex < 0) {
+            return "";
+        }
+        int colon = json.indexOf(':', keyIndex + needle.length());
+        int firstQuote = colon < 0 ? -1 : json.indexOf('"', colon + 1);
+        int secondQuote = firstQuote < 0 ? -1 : json.indexOf('"', firstQuote + 1);
+        if (firstQuote < 0 || secondQuote < 0) {
+            return "";
+        }
+        return json.substring(firstQuote + 1, secondQuote);
+    }
+
+    private static int extractInt(String json, String key) {
+        String needle = "\"" + key + "\"";
+        int keyIndex = json.indexOf(needle);
+        if (keyIndex < 0) {
+            return 0;
+        }
+        int colon = json.indexOf(':', keyIndex + needle.length());
+        if (colon < 0) {
+            return 0;
+        }
+        int start = colon + 1;
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
+            start++;
+        }
+        int end = start;
+        while (end < json.length()) {
+            char c = json.charAt(end);
+            if (c != '-' && (c < '0' || c > '9')) {
+                break;
+            }
+            end++;
+        }
+        if (end <= start) {
+            return 0;
+        }
+        return Integer.parseInt(json.substring(start, end));
+    }
+
+    private record ProbeTarget(String probeId, int sectionX, int sectionY, int sectionZ) {
+        boolean matches(int x, int y, int z) {
+            return x == this.sectionX && y == this.sectionY && z == this.sectionZ;
         }
     }
 }
