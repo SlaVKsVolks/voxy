@@ -347,6 +347,53 @@ public class IrisShaderPatch {
         return null;
     }
 
+    private static String buildDistantHorizonsFallbackPatchData(
+            AbsolutePackPath directory,
+            Function<AbsolutePackPath, String> sourceProvider
+    ) {
+        if (Boolean.getBoolean("voxy.disableDhShaderFallback")) {
+            return null;
+        }
+
+        String dhTerrain = resolveFirstAvailable(
+                directory,
+                sourceProvider,
+                "dh_terrain.fsh",
+                "dh_terrain.vsh",
+                "program/dh_terrain.glsl",
+                "program/dh_water.glsl"
+        );
+        if (dhTerrain == null) {
+            return null;
+        }
+
+        Logger.warn(
+                "Shaderpack has Distant Horizons programs but no Voxy patch data for directory " + directory
+                        + ". Using conservative Voxy fallback patch. This enables the Iris/Voxy pipeline but does not imply full shaderpack-specific Voxy integration."
+        );
+
+        return """
+                {
+                  "version": 1,
+                  "excludeLodsFromVanillaDepth": false,
+                  "opaqueDrawBuffers": [0],
+                  "translucentDrawBuffers": [0],
+                  "uniforms": [],
+                  "opaquePatchData": "
+                    layout(location = 0) out vec4 voxyFallbackColor;
+
+                    void voxy_emitFragment(VoxyFragmentParameters parameters) {
+                        vec4 color = parameters.sampledColour * parameters.tinting;
+                        if (color.a <= 0.00392156862) {
+                            discard;
+                        }
+                        voxyFallbackColor = color;
+                    }
+                  "
+                }
+                """;
+    }
+
     public static IrisShaderPatch makePatch(ShaderPack ipack, AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider) {
         String voxyPatchData = resolveFirstAvailable(
                 directory,
@@ -358,7 +405,15 @@ public class IrisShaderPatch {
                 "world-1/voxy.json"
         );
         if (voxyPatchData == null) {//No voxy patch data in shaderpack
-            return null;
+            voxyPatchData = buildDistantHorizonsFallbackPatchData(directory, sourceProvider);
+            if (voxyPatchData == null) {
+                Logger.warn(
+                        "Shaderpack has no Voxy patch data for directory " + directory
+                                + ". Checked voxy.json, program/voxy.json, world0/voxy.json, world1/voxy.json, and world-1/voxy.json. "
+                                + "DH terrain files do not imply Voxy shader support."
+                );
+                return null;
+            }
         }
 
         //A more graceful exit on blank string

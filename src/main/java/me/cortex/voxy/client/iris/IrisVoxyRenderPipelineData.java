@@ -146,7 +146,10 @@ public class IrisVoxyRenderPipelineData {
     public record StructLayout(int size, String layout, LongConsumer updater) {}
     private static StructLayout createUniformLayoutStructAndUpdater(List<UniformWritingHolder> uniforms) {
         if (uniforms.size() == 0) {
-            return new StructLayout(0, "{\n}", ptr -> {});
+            // A shaderpack may legitimately need no extra Voxy/Iris UBO uniforms.
+            // Emitting an empty GLSL uniform block is invalid and forces Iris to
+            // disable shaders, which then makes Voxy fall back to the normal path.
+            return null;
         }
 
         List<UniformWritingHolder>[] ordering = new List[]{new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>()};
