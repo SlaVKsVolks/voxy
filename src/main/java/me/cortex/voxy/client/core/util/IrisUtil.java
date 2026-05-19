@@ -8,7 +8,7 @@ import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.shadows.ShadowRenderer;
-import net.neoforged.fml.ModList;
+import me.cortex.voxy.commonImpl.NeoForgeModStatus;
 
 import java.io.IOException;
 
@@ -21,7 +21,7 @@ public class IrisUtil {
 
     public static CapturedViewportParameters CAPTURED_VIEWPORT_PARAMETERS;
 
-    public static final boolean IRIS_INSTALLED = ModList.get().isLoaded("iris");
+    public static final boolean IRIS_INSTALLED = NeoForgeModStatus.isLoaded("iris");
     public static final boolean SHADER_SUPPORT = true;//System.getProperty("voxy.enableExperimentalIrisPipeline", "false").equalsIgnoreCase("true");
 
 

@@ -1,7 +1,7 @@
 package me.cortex.voxy.client.core.rendering;
 
 import me.cortex.voxy.client.core.util.IrisUtil;
-import net.neoforged.fml.ModList;
+import me.cortex.voxy.commonImpl.NeoForgeModStatus;
 import org.vivecraft.api.client.VRRenderingAPI;
 
 import java.util.HashMap;
@@ -11,7 +11,7 @@ import java.util.function.Supplier;
 import static org.vivecraft.api.client.data.RenderPass.VANILLA;
 
 public class ViewportSelector <T extends Viewport<?>> {
-    public static final boolean VIVECRAFT_INSTALLED = ModList.get().isLoaded("vivecraft");
+    public static final boolean VIVECRAFT_INSTALLED = NeoForgeModStatus.isLoaded("vivecraft");
 
     private final Supplier<T> creator;
     private final T defaultViewport;

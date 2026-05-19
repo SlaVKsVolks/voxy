@@ -13,6 +13,7 @@ import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRende
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
 import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL30;
@@ -42,6 +43,7 @@ import static org.lwjgl.opengl.GL42.glDepthFunc;
 import static org.lwjgl.opengl.GL42.*;
 import static org.lwjgl.opengl.GL45.glClearNamedFramebufferfi;
 import static org.lwjgl.opengl.GL45.glGetNamedFramebufferAttachmentParameteri;
+import static org.lwjgl.opengl.GL45C.glCheckNamedFramebufferStatus;
 import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 
 public abstract class AbstractRenderPipeline extends TrackedObject {
@@ -99,6 +101,12 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
     public void runPipeline(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
         int depthTexture = this.setup(viewport, sourceFrameBuffer, srcWidth, srcHeight);
+        if (depthTexture == 0) {
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_DEPTH_TEST);
+            glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
+            return;
+        }
 
         var rs = ((AbstractSectionRenderer)this.sectionRenderer);
         GPUTiming.INSTANCE.marker("RO");
@@ -133,7 +141,10 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
     }
 
-    protected void initDepthStencil(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
+    protected boolean initDepthStencil(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
+        if (!this.validateDepthStencilInputs(sourceFrameBuffer, targetFb, srcWidth, srcHeight, width, height)) {
+            return false;
+        }
         glClearNamedFramebufferfi(targetFb, GL_DEPTH_STENCIL, 0, this.properties.clearDepth(), 1);
         // using blit to copy depth from mismatched depth formats is not portable so instead a full screen pass is performed for a depth copy
         // the mismatched formats in this case is the d32 to d24s8
@@ -151,6 +162,10 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
         this.depthStencilSetup.bind();
         int depthTexture = glGetNamedFramebufferAttachmentParameteri(sourceFrameBuffer, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME);
+        if (depthTexture == 0) {
+            RenderCorrectnessDiagnostics.depthGuard("initDepthStencil", "missing_source_depth_attachment", sourceFrameBuffer, targetFb, width, height);
+            return false;
+        }
         glBindTextureUnit(0, depthTexture);
         glBindSampler(0, DEPTH_SAMPLER);
         glUniform2f(1,((float)width)/srcWidth, ((float)height)/srcHeight);
@@ -165,10 +180,20 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         //Make voxy terrain render only where there isnt mc terrain
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilFunc(GL_EQUAL, 1, 0xFF);
+        return true;
     }
 
     private static final long SCRATCH = MemoryUtil.nmemAlloc(4*4*4);
-    protected static void transformBlitDepth(FullscreenBlit blitShader, int srcDepthTex, int dstFB, Viewport<?> viewport, Matrix4f targetTransform) {
+    protected static boolean transformBlitDepth(FullscreenBlit blitShader, int srcDepthTex, int dstFB, Viewport<?> viewport, Matrix4f targetTransform) {
+        if (srcDepthTex == 0 || dstFB == 0 || viewport == null || viewport.width <= 0 || viewport.height <= 0) {
+            RenderCorrectnessDiagnostics.depthGuard("transformBlitDepth", "invalid_blit_inputs", dstFB, srcDepthTex, viewport == null ? 0 : viewport.width, viewport == null ? 0 : viewport.height);
+            return false;
+        }
+        Matrix4f inverseMvp = new Matrix4f(viewport.MVP).invert();
+        if (!inverseMvp.isFinite() || !targetTransform.isFinite()) {
+            RenderCorrectnessDiagnostics.depthGuard("transformBlitDepth", "non_finite_matrix", dstFB, srcDepthTex, viewport.width, viewport.height);
+            return false;
+        }
         // at this point the dst frame buffer doesn't have a stencil attachment so we don't need to keep the stencil test on for the blit
         // in the worst case the dstFB does have a stencil attachment causing this pass to become 'corrupted'
         glDisable(GL_STENCIL_TEST);
@@ -176,7 +201,7 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
         blitShader.bind();
         glBindTextureUnit(0, srcDepthTex);
-        new Matrix4f(viewport.MVP).invert().getToAddress(SCRATCH);
+        inverseMvp.getToAddress(SCRATCH);
         nglUniformMatrix4fv(1, 1, false, SCRATCH);//inverse fromProjection
         targetTransform.getToAddress(SCRATCH);//new Matrix4f(tooProjection).mul(vp.modelView).get(data);
         nglUniformMatrix4fv(2, 1, false, SCRATCH);//tooProjection
@@ -185,6 +210,25 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         blitShader.blit();
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_DEPTH_TEST);
+        return true;
+    }
+
+    private boolean validateDepthStencilInputs(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
+        if (sourceFrameBuffer == 0 || targetFb == 0 || srcWidth <= 0 || srcHeight <= 0 || width <= 0 || height <= 0) {
+            RenderCorrectnessDiagnostics.depthGuard("initDepthStencil", "invalid_framebuffer_or_size", sourceFrameBuffer, targetFb, width, height);
+            return false;
+        }
+        int sourceStatus = glCheckNamedFramebufferStatus(sourceFrameBuffer, GL_FRAMEBUFFER);
+        if (sourceStatus != GL_FRAMEBUFFER_COMPLETE) {
+            RenderCorrectnessDiagnostics.depthGuard("initDepthStencil", "source_incomplete_" + sourceStatus, sourceFrameBuffer, targetFb, width, height);
+            return false;
+        }
+        int targetStatus = glCheckNamedFramebufferStatus(targetFb, GL_FRAMEBUFFER);
+        if (targetStatus != GL_FRAMEBUFFER_COMPLETE) {
+            RenderCorrectnessDiagnostics.depthGuard("initDepthStencil", "target_incomplete_" + targetStatus, sourceFrameBuffer, targetFb, width, height);
+            return false;
+        }
+        return true;
     }
 
     protected void innerPrimaryWork(Viewport<?> viewport, int depthBuffer) {

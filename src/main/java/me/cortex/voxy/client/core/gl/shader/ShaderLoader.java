@@ -48,16 +48,35 @@ public class ShaderLoader {
             return new BufferedReader(new StringReader(src)).lines().toList();
         }
         private static String loadShaderAsset(ResourceLocation id) {
-            String path = String.format("/assets/%s/shaders/%s", id.getNamespace(), id.getPath());
-            try (InputStream in = ShaderLoadingParser.class.getResourceAsStream(path)) {
+            String classpathPath = String.format("assets/%s/shaders/%s", id.getNamespace(), id.getPath());
+            String modulePath = "/" + classpathPath;
+            try (InputStream in = openShaderAsset(classpathPath, modulePath)) {
                 if (in == null) {
-                    throw new RuntimeException("Shader not found: " + path);
+                    throw new RuntimeException("Shader not found: " + modulePath);
                 } else {
                     return IOUtils.toString(in, StandardCharsets.UTF_8);
                 }
             } catch (IOException e) {
-                throw new RuntimeException("Failed to read shader source for " + path, e);
+                throw new RuntimeException("Failed to read shader source for " + modulePath, e);
             }
+        }
+
+        private static InputStream openShaderAsset(String classpathPath, String modulePath) {
+            var classLoader = ShaderLoadingParser.class.getClassLoader();
+            var fromClasspath = classLoader != null ? classLoader.getResourceAsStream(classpathPath) : null;
+            if (fromClasspath != null) {
+                return fromClasspath;
+            }
+
+            var contextLoader = Thread.currentThread().getContextClassLoader();
+            if (contextLoader != null && contextLoader != classLoader) {
+                var fromContext = contextLoader.getResourceAsStream(classpathPath);
+                if (fromContext != null) {
+                    return fromContext;
+                }
+            }
+
+            return ShaderLoadingParser.class.getResourceAsStream(modulePath);
         }
     }
 }

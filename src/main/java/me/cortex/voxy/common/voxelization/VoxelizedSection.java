@@ -54,4 +54,13 @@ public class VoxelizedSection {
         Arrays.fill(this.section, 0);
         return this;
     }
+
+    public VoxelizedSection copy() {
+        var copy = new VoxelizedSection(Arrays.copyOf(this.section, this.section.length));
+        copy.x = this.x;
+        copy.y = this.y;
+        copy.z = this.z;
+        copy.lvl0NonAirCount = this.lvl0NonAirCount;
+        return copy;
+    }
 }

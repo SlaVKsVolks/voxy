@@ -2,8 +2,6 @@ package me.cortex.voxy.client.core;
 
 import com.mojang.blaze3d.platform.GlConst;
 import com.mojang.blaze3d.platform.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
-
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.config.VoxyConfig;
@@ -32,6 +30,7 @@ import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -217,6 +216,9 @@ public class VoxyRenderSystem {
 
         //cameraY += 100;
         var voxyProjection = computeProjectionMat(this.properties, vanillaProjection);
+        if (voxyProjection == null) {
+            return null;
+        }
 
         int[] dims = new int[4];
         glGetIntegerv(GL_VIEWPORT, dims);
@@ -451,25 +453,16 @@ public class VoxyRenderSystem {
     }*/
 
     private static Matrix4f computeProjectionMat(RenderProperties properties, Matrix4fc base) {
-
-        //this jank is to capture the extra crap they inject like viewbobbing
-        var rawMCProj = RenderSystem.getProjectionMatrix();
-        if (rawMCProj == null) {
-            return new Matrix4f(base);
+        if (base == null || !base.isFinite()) {
+            RenderCorrectnessDiagnostics.projectionGuard("computeProjectionMat", "non_finite_base_projection");
+            Logger.warn("Skipping Voxy frame due to non-finite base projection matrix");
+            return null;
         }
-        var extraProjection = rawMCProj.invert(new Matrix4f()).mul(base);
 
         float near = getRenderDistance()<=32.0f?8f:16f;
         near = VoxyClient.disableSodiumChunkRender()?0.1f:near;
 
         float far = 16*3000;
-
-        /* jank way of just modifying the base raw
-        if (true) {
-            return new Matrix4f(base)
-                    .m22((far + near) / (near - far))
-                    .m32((far+far) * near / (near - far));
-        }*/
 
         //Flip near and far on reverse depth
         if (properties.isReverseZ()) {
@@ -478,14 +471,17 @@ public class VoxyRenderSystem {
             far = tmp;
         }
 
-        Matrix4f result = extraProjection.mulLocal(
-                new Matrix4f(rawMCProj)
+        // Keep the camera/FOV terms from Sodium's per-pass matrix, but extend only the
+        // depth range. Inverting RenderSystem's global projection is not reliable here:
+        // on the NeoForge/Sodium 0.8.12 path it can be stale or singular during terrain
+        // layer rendering, which produced non-finite matrices and Voxy depth mismatch.
+        Matrix4f result = new Matrix4f(base)
                 .m22((properties.isZero2One()?far:(far+near)) / (near - far))
-                .m32((properties.isZero2One()?far:(far+far)) * near / (near - far))
-        );
+                .m32((properties.isZero2One()?far:(far+far)) * near / (near - far));
         if (!result.isFinite()) {
-            Logger.warn("Computed non-finite Voxy projection matrix, falling back to vanilla projection");
-            return new Matrix4f(base);
+            RenderCorrectnessDiagnostics.projectionGuard("computeProjectionMat", "non_finite_depth_extended_projection");
+            Logger.warn("Skipping Voxy frame due to non-finite depth-extended projection matrix");
+            return null;
         }
         return result;
     }

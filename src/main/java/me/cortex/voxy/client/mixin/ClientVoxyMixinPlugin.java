@@ -1,6 +1,6 @@
 package me.cortex.voxy.client.mixin;
 
-import net.neoforged.fml.ModList;
+import me.cortex.voxy.commonImpl.NeoForgeModStatus;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -17,10 +17,10 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void onLoad(String mixinPackage) {
-        valkyrienSkiesInstalled = ModList.get().isLoaded("valkyrienskies");
-        nvidiumInstalled = ModList.get().isLoaded("nvidium");
-        irisInstalled = ModList.get().isLoaded("iris");
-        sodiumInstalled = ModList.get().isLoaded("sodium");
+        valkyrienSkiesInstalled = NeoForgeModStatus.isLoaded("valkyrienskies");
+        nvidiumInstalled = NeoForgeModStatus.isLoaded("nvidium");
+        irisInstalled = NeoForgeModStatus.isLoaded("iris");
+        sodiumInstalled = NeoForgeModStatus.isLoaded("sodium");
     }
 
     @Override

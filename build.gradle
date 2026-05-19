@@ -4,6 +4,16 @@ plugins {
     id 'net.neoforged.moddev' version '2.0.141'
 }
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
 version = project.mod_version
 group = project.maven_group
 
@@ -134,7 +144,6 @@ dependencies {
     jarJar 'redis.clients:jedis:5.1.0'
     jarJar 'org.rocksdb:rocksdbjni:10.2.1'
     jarJar 'org.apache.commons:commons-pool2:2.12.0'
-    jarJar 'org.lz4:lz4-java:1.8.0'
     jarJar 'org.tukaani:xz:1.10'
     jarJar 'org.xerial:sqlite-jdbc:3.49.1.0'
 }
@@ -161,6 +170,53 @@ jar {
     from('LICENSE') {
         rename { "${it}_${project.archives_base_name}" }
     }
+}
+
+def rewriteJarJarMetadata = tasks.register('rewriteJarJarMetadata') {
+    dependsOn tasks.named('jar')
+    outputs.upToDateWhen { false }
+
+    doLast {
+        def jarPath = tasks.named('jar').get().archiveFile.get().asFile.toPath()
+        def tempPath = Files.createTempFile(jarPath.parent, jarPath.fileName.toString(), '.tmp')
+
+        ZipFile zip = new ZipFile(jarPath.toFile())
+        try {
+            new ZipOutputStream(Files.newOutputStream(tempPath)).withCloseable { out ->
+                zip.entries().each { entry ->
+                    def replacement = new ZipEntry(entry.name)
+                    replacement.time = entry.time
+                    out.putNextEntry(replacement)
+
+                    if (entry.name == 'META-INF/jarjar/metadata.json') {
+                        def metadata = new JsonSlurper().parse(zip.getInputStream(entry))
+                        metadata.jars.each { embedded ->
+                            def path = embedded.path?.toString()
+                            if (path != null && path.contains('-natives-')) {
+                                def nativeSuffix = path.substring(path.indexOf('-natives-'), path.length() - '.jar'.length())
+                                embedded.identifier.artifact = embedded.identifier.artifact + nativeSuffix
+                            }
+                        }
+                        out.write(JsonOutput.prettyPrint(JsonOutput.toJson(metadata)).getBytes(StandardCharsets.UTF_8))
+                    } else {
+                        zip.getInputStream(entry).withCloseable { input ->
+                            input.transferTo(out)
+                        }
+                    }
+
+                    out.closeEntry()
+                }
+            }
+        } finally {
+            zip.close()
+        }
+
+        Files.move(tempPath, jarPath, StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+tasks.named('build') {
+    dependsOn rewriteJarJarMetadata
 }
 
 publishing {

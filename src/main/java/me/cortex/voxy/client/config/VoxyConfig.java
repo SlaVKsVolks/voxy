@@ -58,7 +58,10 @@ public class VoxyConfig {
     }
 
     private static VoxyConfig loadOrCreate() {
-        if (VoxyCommon.isAvailable()) {
+        // The NeoForge client config can be initialized before Voxy registers its
+        // instance factory. Gating config loading on isAvailable() permanently
+        // disabled rendering for that launch even when voxy-config.json enabled it.
+        if (VoxyCommon.IS_IN_MINECRAFT) {
             var path = getConfigPath();
             if (Files.exists(path)) {
                 try (FileReader reader = new FileReader(path.toFile())) {
@@ -86,7 +89,7 @@ public class VoxyConfig {
     }
 
     public void save() {
-        if (!VoxyCommon.isAvailable()) {
+        if (!VoxyCommon.IS_IN_MINECRAFT) {
             Logger.info("Not saving config since voxy is unavalible");
             return;
         }

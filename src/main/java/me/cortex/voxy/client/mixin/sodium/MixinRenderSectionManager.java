@@ -4,6 +4,7 @@ import me.cortex.voxy.client.ICheekyClientChunkCache;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.caffeinemc.mods.sodium.client.gl.device.CommandList;
@@ -18,7 +19,7 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-import net.neoforged.fml.ModList;
+import me.cortex.voxy.commonImpl.NeoForgeModStatus;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -31,7 +32,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value = RenderSectionManager.class, remap = false)
 public class MixinRenderSectionManager {
     @Unique
-    private static final boolean BOBBY_INSTALLED = ModList.get().isLoaded("bobby");
+    private static final boolean BOBBY_INSTALLED = NeoForgeModStatus.isLoaded("bobby");
 
     @Shadow @Final private ClientLevel level;
 
@@ -93,24 +94,15 @@ public class MixinRenderSectionManager {
 
     @Redirect(method = "updateSectionInfo", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/RenderSection;setInfo(Lnet/caffeinemc/mods/sodium/client/render/chunk/data/BuiltSectionInfo;)Z"))
     private boolean voxy$updateOnUpload(RenderSection instance, BuiltSectionInfo info) {
-        boolean wasBuilt = instance.getFlags()!=0;
-        int flags = instance.getFlags();
-        instance.setInfo(info);
-        if (wasBuilt == (instance.getFlags()!=0)) {//Only want to do stuff on change
-            return true;
-        }
-
-        flags |= instance.getFlags();
-        if (flags == 0)//Only process things with stuff
-            return true;
+        boolean wasRenderable = instance.getFlags()!=0;
+        boolean infoChanged = instance.setInfo(info);
+        boolean isBuilt = instance.isBuilt();
+        boolean isRenderable = instance.getFlags()!=0;
 
         VoxyRenderSystem system = ((IGetVoxyRenderSystem)(this.level.levelRenderer)).voxy$getRenderSystem();
-        if (system == null) {
-            return true;
-        }
         int x = instance.getChunkX(), y = instance.getChunkY(), z = instance.getChunkZ();
 
-        if (wasBuilt && VoxyConfig.CONFIG.ingestEnabled) {
+        if (system != null && isBuilt && VoxyConfig.CONFIG.ingestEnabled) {
             var tracker = ((AccessorChunkTracker)ChunkTrackerHolder.get(this.level)).getChunkStatus();
             //in theory the cache value could be wrong but is so soso unlikely and at worst means we either duplicate ingest a chunk
             // which... could be bad ;-; or we dont ingest atall which is ok!
@@ -135,9 +127,27 @@ public class MixinRenderSectionManager {
 
                     //Note: we dont do this check and just blindly ingest, it shouldbe ok :tm:
                     //if (blp != null || slp != null)
-                        VoxelIngestService.rawIngest(system.getEngine(), section, x, y, z, blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
+                    boolean queued = VoxelIngestService.rawIngest(system.getEngine(), section, x, y, z, blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
+                    RenderCorrectnessDiagnostics.ingest("sodium_upload", x, y, z, section.hasOnlyAir(), queued, queued ? "queued" : "raw_ingest_rejected");
+                } else {
+                    RenderCorrectnessDiagnostics.uploadIngestSkippedNoWorld.increment();
+                    RenderCorrectnessDiagnostics.ingest("sodium_upload", x, y, z, false, false, "missing_chunk");
                 }
+            } else {
+                RenderCorrectnessDiagnostics.uploadIngestSkippedChunkStatus.increment();
+                RenderCorrectnessDiagnostics.ingest("sodium_upload", x, y, z, false, false, "chunk_status_" + this.cachedChunkStatus);
             }
+        } else if (system == null && isBuilt && VoxyConfig.CONFIG.ingestEnabled) {
+            RenderCorrectnessDiagnostics.uploadIngestSkippedNoWorld.increment();
+            RenderCorrectnessDiagnostics.ingest("sodium_upload", x, y, z, false, false, "missing_render_system");
+        }
+
+        if (wasRenderable == isRenderable) {//Only chunk-bound membership changes on renderable transitions.
+            return infoChanged;
+        }
+
+        if (system == null) {
+            return infoChanged;
         }
 
         //Do some very cheeky stuff for MiB
@@ -147,13 +157,15 @@ public class MixinRenderSectionManager {
             y+=16+(256-32-sector*30);
         }
         long pos = SectionPos.asLong(x,y,z);
-        if (wasBuilt) {//Remove
+        if (wasRenderable) {//Remove
             //TODO: on chunk remove do ingest if is surrounded by built chunks (or when the tracker says is ok)
 
             system.chunkBoundRenderer.removeSection(pos);
+            RenderCorrectnessDiagnostics.chunkBound("remove", pos);
         } else {//Add
             system.chunkBoundRenderer.addSection(pos);
+            RenderCorrectnessDiagnostics.chunkBound("add", pos);
         }
-        return true;
+        return infoChanged;
     }
 }

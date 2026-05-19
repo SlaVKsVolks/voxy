@@ -1,6 +1,7 @@
 package me.cortex.voxy.common.world.service;
 
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.thread.Service;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.voxelization.ILightingSupplier;
@@ -24,8 +25,27 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 public class VoxelIngestService {
     private static final ThreadLocal<VoxelizedSection> SECTION_CACHE = ThreadLocal.withInitial(VoxelizedSection::createEmpty);
     private final Service service;
-    private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunkSection section, DataLayer blockLight, DataLayer skyLight){}
-    private final ConcurrentLinkedDeque<IngestSection> ingestQueue = new ConcurrentLinkedDeque<>();
+    private interface IngestTask {
+        void process();
+    }
+    private record IngestSection(int cx, int cy, int cz, WorldEngine world, LevelChunkSection section, DataLayer blockLight, DataLayer skyLight) implements IngestTask {
+        @Override
+        public void process() {
+            world.markActive();
+
+            var vs = SECTION_CACHE.get().setPosition(cx, cy, cz);
+            VoxelizedSection update = buildUpdate(world, section, cx, cy, cz, blockLight, skyLight, vs);
+            WorldUpdater.insertUpdate(world, update);
+        }
+    }
+    private record IngestVoxelized(WorldEngine world, VoxelizedSection section) implements IngestTask {
+        @Override
+        public void process() {
+            world.markActive();
+            WorldUpdater.insertUpdate(world, section);
+        }
+    }
+    private final ConcurrentLinkedDeque<IngestTask> ingestQueue = new ConcurrentLinkedDeque<>();
 
     public VoxelIngestService(ServiceManager pool) {
         this.service = pool.createServiceNoCleanup(()->this::processJob, 5000, "Ingest service");
@@ -33,31 +53,45 @@ public class VoxelIngestService {
 
     private void processJob() {
         var task = this.ingestQueue.pop();
-        task.world.markActive();
+        task.process();
+    }
 
-        var section = task.section;
-        var vs = SECTION_CACHE.get().setPosition(task.cx, task.cy, task.cz);
-
-        if (section.hasOnlyAir() && task.blockLight==null && task.skyLight==null) {//If the chunk section has lighting data, propagate it
-            WorldUpdater.insertUpdate(task.world, vs.zero());
-        } else {
-            VoxelizedSection csec = WorldConversionFactory.convert(
-                    vs,
-                    task.world.getMapper(),
-                    section.getStates(),
-                    section.getBiomes(),
-                    getLightingSupplier(task)
-            );
-            WorldVoxilizedSectionMipper.mipSection(csec, task.world.getMapper());
-            WorldUpdater.insertUpdate(task.world, csec);
+    private static VoxelizedSection buildUpdate(
+            WorldEngine world,
+            LevelChunkSection section,
+            int x,
+            int y,
+            int z,
+            DataLayer blockLight,
+            DataLayer skyLight,
+            VoxelizedSection destination
+    ) {
+        destination.setPosition(x, y, z);
+        if (section.hasOnlyAir() && blockLight==null && skyLight==null) {//If the chunk section has lighting data, propagate it
+            return destination.zero();
         }
+
+        VoxelizedSection csec = WorldConversionFactory.convert(
+                destination,
+                world.getMapper(),
+                section.getStates(),
+                section.getBiomes(),
+                getLightingSupplier(section, blockLight, skyLight)
+        );
+        WorldVoxilizedSectionMipper.mipSection(csec, world.getMapper());
+        return csec;
     }
 
     @NotNull
     private static ILightingSupplier getLightingSupplier(IngestSection task) {
+        return getLightingSupplier(task.section, task.blockLight, task.skyLight);
+    }
+
+    @NotNull
+    private static ILightingSupplier getLightingSupplier(LevelChunkSection section, DataLayer blockLight, DataLayer skyLight) {
         ILightingSupplier supplier = (x,y,z) -> (byte) 0;
-        var sla = task.skyLight;
-        var bla = task.blockLight;
+        var sla = skyLight;
+        var bla = blockLight;
         boolean sl = sla != null && !sla.isEmpty();
         boolean bl = bla != null && !bla.isEmpty();
         if (sl || bl) {
@@ -197,11 +231,23 @@ public class VoxelIngestService {
     }
 
     private boolean rawIngest0(WorldEngine engine, LevelChunkSection section, int x, int y, int z, DataLayer bl, DataLayer sl) {
-        this.ingestQueue.add(new IngestSection(x, y, z, engine, section, bl, sl));
+        VoxelizedSection snapshot;
+        try {
+            snapshot = buildUpdate(engine, section, x, y, z, bl, sl, VoxelizedSection.createEmpty()).copy();
+        } catch (Exception e) {
+            RenderCorrectnessDiagnostics.ingest("raw_snapshot_failed", x, y, z, false, false, e.getClass().getSimpleName());
+            Logger.error("Failed to snapshot raw Voxy ingest section", x, y, z, e);
+            return false;
+        }
+
+        boolean sectionAir = snapshot.lvl0NonAirCount == 0;
+        this.ingestQueue.add(new IngestVoxelized(engine, snapshot));
         try {
             this.service.execute();
+            RenderCorrectnessDiagnostics.ingest("raw_snapshot", x, y, z, sectionAir, true, "queued");
             return true;
         } catch (Exception e) {
+            RenderCorrectnessDiagnostics.ingest("raw_snapshot_execute_failed", x, y, z, sectionAir, false, e.getClass().getSimpleName());
             Logger.error("Executing had an error: assume shutting down, aborting",e);
             return false;
         }

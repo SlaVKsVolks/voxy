@@ -9,11 +9,15 @@ public class VoxyCommon {
     public static final String MOD_ID = "voxy";
     public static final String MOD_VERSION = resolveVersion();
     public static final boolean IS_DEDICATED_SERVER = FMLLoader.getDist().isDedicatedServer();
-    public static final boolean IS_IN_MINECRAFT = ModList.get().isLoaded(MOD_ID);
+    public static final boolean IS_IN_MINECRAFT = NeoForgeModStatus.isLoaded(MOD_ID);
     private static boolean initialized;
 
     private static String resolveVersion() {
-        return ModList.get().getModContainerById(MOD_ID)
+        var modList = ModList.get();
+        if (modList == null) {
+            return "<LOADING>";
+        }
+        return modList.getModContainerById(MOD_ID)
                 .map(container -> container.getModInfo().getVersion().toString())
                 .orElse("<UNKNOWN>");
     }

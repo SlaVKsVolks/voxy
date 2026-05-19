@@ -6,7 +6,7 @@ import me.cortex.voxy.common.world.service.VoxelIngestService;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.neoforged.fml.ModList;
+import me.cortex.voxy.commonImpl.NeoForgeModStatus;
 
 import org.jetbrains.annotations.Nullable;
 
@@ -20,7 +20,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ClientChunkCache.class)
 public class MixinClientChunkCache implements ICheekyClientChunkCache {
     @Unique
-    private static final boolean BOBBY_INSTALLED = ModList.get().isLoaded("bobby");
+    private static final boolean BOBBY_INSTALLED = NeoForgeModStatus.isLoaded("bobby");
 
     @Shadow
     private volatile ClientChunkCache.Storage storage;
