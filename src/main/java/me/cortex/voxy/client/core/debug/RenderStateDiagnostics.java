@@ -2,6 +2,7 @@ package me.cortex.voxy.client.core.debug;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.RenderProperties;
+import me.cortex.voxy.client.core.rendering.RenderStateSnapshot;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4fc;
@@ -47,6 +48,8 @@ public final class RenderStateDiagnostics {
 
     private static volatile long lastWriteMs = 0L;
     private static volatile long lastStateHash = Long.MIN_VALUE;
+    private static volatile long lastUniformSnapshotSequence = Long.MIN_VALUE;
+    private static volatile long lastUniformWriteMs = 0L;
     private static volatile long sequence = 0L;
 
     private RenderStateDiagnostics() {
@@ -246,6 +249,51 @@ public final class RenderStateDiagnostics {
         appendKv(sb, "hiz_packed_levels", viewport.hiZBuffer.getPackedLevels());
         sb.append(',');
         appendKv(sb, "approx_voxy_fov_y_deg", approxFovYDegrees(viewport.projection));
+        sb.append('}');
+
+        writeLine(sb.toString());
+    }
+
+    public static void captureUniformBridge(String stage, RenderStateSnapshot snapshot) {
+        if (!(ENABLED_PROPERTY || VoxyConfig.CONFIG.uniformBridgeDebug) || snapshot == null) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long snapshotSequence = snapshot.sequence();
+        if (!ALWAYS_WRITE && snapshotSequence == lastUniformSnapshotSequence && (now - lastUniformWriteMs) < MIN_INTERVAL_MS) {
+            return;
+        }
+        lastUniformSnapshotSequence = snapshotSequence;
+        lastUniformWriteMs = now;
+
+        StringBuilder sb = new StringBuilder(2048);
+        sb.append('{');
+        appendKv(sb, "ts", isoNow());
+        sb.append(',');
+        appendKv(sb, "type", "uniform_bridge");
+        sb.append(',');
+        appendKv(sb, "stage", stage);
+        sb.append(',');
+        appendKv(sb, "seq", ++sequence);
+        sb.append(',');
+        appendKv(sb, "snapshot_sequence", snapshotSequence);
+        sb.append(',');
+        appendKv(sb, "frame_id", snapshot.frameId());
+        sb.append(',');
+        appendKv(sb, "width", snapshot.width());
+        sb.append(',');
+        appendKv(sb, "height", snapshot.height());
+        sb.append(',');
+        appendKv(sb, "camera_x", snapshot.cameraX());
+        sb.append(',');
+        appendKv(sb, "camera_y", snapshot.cameraY());
+        sb.append(',');
+        appendKv(sb, "camera_z", snapshot.cameraZ());
+        sb.append(',');
+        appendKv(sb, "configured_section_render_distance", snapshot.sectionRenderDistance());
+        sb.append(',');
+        appendKv(sb, "approx_voxy_fov_y_deg", approxFovYDegrees(snapshot.projection()));
         sb.append('}');
 
         writeLine(sb.toString());

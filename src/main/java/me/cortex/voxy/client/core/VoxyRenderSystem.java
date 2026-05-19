@@ -244,7 +244,8 @@ public class VoxyRenderSystem {
                 .setModelView(new Matrix4f(modelView))
                 .setCamera(cameraX, cameraY, cameraZ)
                 .setScreenSize(width, height)
-                .update();
+                .update()
+                .captureRenderStateSnapshot(VoxyConfig.CONFIG.sectionRenderDistance);
 
         RenderStateDiagnostics.captureViewport(
                 "setupViewport",

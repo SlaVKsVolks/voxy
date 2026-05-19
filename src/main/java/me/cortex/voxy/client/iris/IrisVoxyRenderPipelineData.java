@@ -325,7 +325,7 @@ public class IrisVoxyRenderPipelineData {
             uniforms.add(new UniformWritingHolder(
                     "vxRenderDistance",
                     UniformType.INT,
-                    offset -> ptr -> MemoryUtil.memPutInt(ptr + offset, java.lang.Math.round(VoxyConfig.CONFIG.sectionRenderDistance * 32))
+                    offset -> ptr -> MemoryUtil.memPutInt(ptr + offset, VoxyUniforms.getRenderDistance())
             ));
         }
 
@@ -333,7 +333,7 @@ public class IrisVoxyRenderPipelineData {
             uniforms.add(new UniformWritingHolder("vxViewProj", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getViewProjection)));
         }
         if (requested.contains("vxViewProjInv") && seenUniforms.add("vxViewProjInv")) {
-            uniforms.add(new UniformWritingHolder("vxViewProjInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getViewProjection()).invert())));
+            uniforms.add(new UniformWritingHolder("vxViewProjInv", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getViewProjectionInverse)));
         }
         if (requested.contains("vxViewProjPrev") && seenUniforms.add("vxViewProjPrev")) {
             uniforms.add(new UniformWritingHolder("vxViewProjPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousViewProjection)));
@@ -343,7 +343,7 @@ public class IrisVoxyRenderPipelineData {
             uniforms.add(new UniformWritingHolder("vxModelView", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getModelView)));
         }
         if (requested.contains("vxModelViewInv") && seenUniforms.add("vxModelViewInv")) {
-            uniforms.add(new UniformWritingHolder("vxModelViewInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getModelView()).invert())));
+            uniforms.add(new UniformWritingHolder("vxModelViewInv", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getModelViewInverse)));
         }
         if (requested.contains("vxModelViewPrev") && seenUniforms.add("vxModelViewPrev")) {
             uniforms.add(new UniformWritingHolder("vxModelViewPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousModelView)));
@@ -353,7 +353,7 @@ public class IrisVoxyRenderPipelineData {
             uniforms.add(new UniformWritingHolder("vxProj", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getProjection)));
         }
         if (requested.contains("vxProjInv") && seenUniforms.add("vxProjInv")) {
-            uniforms.add(new UniformWritingHolder("vxProjInv", UniformType.MAT4, mat4Writer.apply(() -> new Matrix4f(VoxyUniforms.getProjection()).invert())));
+            uniforms.add(new UniformWritingHolder("vxProjInv", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getProjectionInverse)));
         }
         if (requested.contains("vxProjPrev") && seenUniforms.add("vxProjPrev")) {
             uniforms.add(new UniformWritingHolder("vxProjPrev", UniformType.MAT4, mat4Writer.apply(VoxyUniforms::getPreviousProjection)));

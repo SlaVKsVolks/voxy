@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.VoxyInstance;
@@ -59,10 +60,6 @@ public abstract class MixinClientLevel {
     @Inject(method = "setBlocksDirty", at = @At("TAIL"))
     private void voxy$injectIngestOnStateChange(BlockPos pos, BlockState old, BlockState updated, CallbackInfo cir) {
         if (old == updated) return;
-
-        //TODO: is this _really_ needed, we should have enough processing power to not need todo it if its only a
-        // block removal
-        if (!updated.isAir()) return;
         if (VoxyCommon.getInstance()==null) return;
         if (!VoxyConfig.CONFIG.ingestEnabled) return;//Only ingest if setting enabled
 
@@ -72,22 +69,21 @@ public abstract class MixinClientLevel {
             return;
         }
 
-        int x = pos.getX()&15;
-        int y = pos.getY()&15;
-        int z = pos.getZ()&15;
-        if (x == 0 || x==15 || y==0 || y==15 || z==0||z==15) {//Update if there is a statechange on the boarder
-            var csp = SectionPos.of(pos);
-            //Is not using voxy$cheekyGetChunk as dont think is need
-            var chunk = self.getChunk(pos.getX()>>4, pos.getZ()>>4, ChunkStatus.FULL, false);
-            if (chunk != null) {
-                var section = chunk.getSection(csp.y() - this.bottomSectionY);
-                var lp = self.getLightEngine();
+        var csp = SectionPos.of(pos);
+        // Ingest the whole section for every real block-state change. Restricting this
+        // to air/border changes leaves interior edits visible as stale LoD geometry.
+        var chunk = self.getChunk(pos.getX()>>4, pos.getZ()>>4, ChunkStatus.FULL, false);
+        if (chunk != null) {
+            var section = chunk.getSection(csp.y() - this.bottomSectionY);
+            var lp = self.getLightEngine();
 
-                var blp = lp.getLayerListener(LightLayer.BLOCK).getDataLayerData(csp);
-                var slp = lp.getLayerListener(LightLayer.SKY).getDataLayerData(csp);
+            var blp = lp.getLayerListener(LightLayer.BLOCK).getDataLayerData(csp);
+            var slp = lp.getLayerListener(LightLayer.SKY).getDataLayerData(csp);
 
-                VoxelIngestService.rawIngest(wi, section, csp.x(), csp.y(), csp.z(), blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
-            }
+            boolean queued = VoxelIngestService.rawIngest(wi, section, csp.x(), csp.y(), csp.z(), blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
+            RenderCorrectnessDiagnostics.ingest("block_update", csp.x(), csp.y(), csp.z(), section.hasOnlyAir(), queued, queued ? "queued" : "raw_ingest_rejected");
+        } else {
+            RenderCorrectnessDiagnostics.ingest("block_update", csp.x(), csp.y(), csp.z(), updated.isAir(), false, "missing_chunk");
         }
     }
 }

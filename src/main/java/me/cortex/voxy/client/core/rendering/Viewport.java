@@ -39,6 +39,7 @@ public abstract class Viewport <A extends Viewport<A>> {
     public final Matrix4f MVP = new Matrix4f();
     public final Vector3i section = new Vector3i();
     public final Vector3f innerTranslation = new Vector3f();
+    private RenderStateSnapshot renderStateSnapshot = RenderStateSnapshot.identity();
 
     private final RenderProperties properties;
 
@@ -115,6 +116,15 @@ public abstract class Viewport <A extends Viewport<A>> {
         }
 
         return (A) this;
+    }
+
+    public A captureRenderStateSnapshot(float sectionRenderDistance) {
+        this.renderStateSnapshot = RenderStateSnapshot.capture(this, this.renderStateSnapshot, sectionRenderDistance);
+        return (A) this;
+    }
+
+    public RenderStateSnapshot getRenderStateSnapshot() {
+        return this.renderStateSnapshot;
     }
 
     public abstract GlBuffer getRenderList();
