@@ -60,6 +60,7 @@ public final class VoxyHandoffPolicyTest {
         assertProviderCurrentRefreshDoesNotRetainStaleGaps();
         assertProviderCurrentRefreshDoesNotInventSolidPassOwnership();
         assertProviderRejectedMeshCommitIsDiagnosticFailure();
+        assertProviderCurrentRefreshPrunesStaleRenderListEntries();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -1147,6 +1148,43 @@ public final class VoxyHandoffPolicyTest {
         }
         if (VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Rejected mixed-pass provider mesh commits must not pass render authority");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshPrunesStaleRenderListEntries() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        long currentSection = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        long staleSection = WorldEngine.getWorldSectionId(0, 7, 0, 0);
+        provider.recordCommittedMesh(currentSection, exactCell, 601, 1L);
+        provider.recordCommittedMesh(staleSection, exactCell, 602, 1L);
+        if (!java.util.Arrays.equals(provider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {601, 602})) {
+            throw new AssertionError("Test setup expected two provider-owned render-list entries");
+        }
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(currentSection, exactCell, 601, 1L);
+        provider.finishCurrentOwnershipRefresh();
+
+        int[] meshIds = provider.drawDecision(VoxyTerrainPass.SOLID).meshIds();
+        if (!java.util.Arrays.equals(meshIds, new int[] {601})) {
+            throw new AssertionError("Current refresh must prune stale provider render-list mesh ids, got "
+                    + java.util.Arrays.toString(meshIds));
         }
     }
 

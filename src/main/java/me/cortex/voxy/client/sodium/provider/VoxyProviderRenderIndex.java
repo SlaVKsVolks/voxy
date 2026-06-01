@@ -3,6 +3,7 @@ package me.cortex.voxy.client.sodium.provider;
 import me.cortex.voxy.common.world.WorldEngine;
 
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -40,6 +41,18 @@ public final class VoxyProviderRenderIndex {
 
     public void remove(long sectionKey) {
         if (this.cells.remove(sectionKey) != null) {
+            this.epoch.incrementAndGet();
+        }
+    }
+
+    public void retainOnly(Set<Long> sectionKeys) {
+        boolean removed = false;
+        for (Long existingKey : this.cells.keySet()) {
+            if (!sectionKeys.contains(existingKey) && this.cells.remove(existingKey) != null) {
+                removed = true;
+            }
+        }
+        if (removed) {
             this.epoch.incrementAndGet();
         }
     }

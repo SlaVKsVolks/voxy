@@ -2,6 +2,7 @@ package me.cortex.voxy.client.sodium.provider;
 
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -52,6 +53,7 @@ public final class VoxyFarTerrainProvider {
     private final AtomicLong providerTraversalBypassCount = new AtomicLong();
     private volatile VoxyFarTerrainProviderSnapshot snapshot;
     private volatile VoxyTerrainProviderDiagnostics diagnostics;
+    private volatile Set<Long> currentRefreshRenderSections;
 
     private enum BoundaryCoverageState {
         EXACT,
@@ -109,6 +111,7 @@ public final class VoxyFarTerrainProvider {
         this.providerRenderListStaleSkips.set(0);
         this.providerCommandGenerationCount.set(0);
         this.providerTraversalBypassCount.set(0);
+        this.currentRefreshRenderSections = null;
         this.diagnostics = VoxyTerrainProviderDiagnostics.empty(snapshot);
     }
 
@@ -360,6 +363,7 @@ public final class VoxyFarTerrainProvider {
 
     public void beginCurrentOwnershipRefresh() {
         this.boundaryCoverage.clear();
+        this.currentRefreshRenderSections = ConcurrentHashMap.newKeySet();
     }
 
     public void recordCurrentOwnershipDecision(long sectionKey, VoxyTerrainOwnershipCell cell) {
@@ -387,12 +391,23 @@ public final class VoxyFarTerrainProvider {
                     false
             ));
             this.applyRenderIndexRecordResult(sectionKey, recordResult);
+            if (recordResult.recorded()) {
+                Set<Long> refreshedSections = this.currentRefreshRenderSections;
+                if (refreshedSections != null) {
+                    refreshedSections.add(sectionKey);
+                }
+            }
         } else {
             this.renderIndex.remove(sectionKey);
         }
     }
 
     public void finishCurrentOwnershipRefresh() {
+        Set<Long> refreshedSections = this.currentRefreshRenderSections;
+        this.currentRefreshRenderSections = null;
+        if (refreshedSections != null) {
+            this.renderIndex.retainOnly(refreshedSections);
+        }
         this.refreshBoundaryDiagnostics();
     }
 
