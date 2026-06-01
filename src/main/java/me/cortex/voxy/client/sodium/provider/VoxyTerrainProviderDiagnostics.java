@@ -39,7 +39,7 @@ public record VoxyTerrainProviderDiagnostics(
     }
 
     public long unsupportedPassRenderedSections() {
-        return this.fluidPassMeshes + this.translucentPassMeshes;
+        return this.cutoutPassMeshes + this.fluidPassMeshes + this.translucentPassMeshes;
     }
 
     public String sodiumMaterialParityVerdict() {

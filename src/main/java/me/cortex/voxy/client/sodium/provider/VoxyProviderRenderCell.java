@@ -19,7 +19,9 @@ public record VoxyProviderRenderCell(
                 || this.ownership == VoxyTerrainOwnership.VOXY_PARENT_FALLBACK)
                 && this.meshId >= 0
                 && this.sourceTrusted
-                && this.materialValid;
+                && this.materialValid
+                && this.passMask != 0
+                && Integer.bitCount(this.passMask) == 1;
     }
 
     public boolean supports(VoxyTerrainPass pass) {

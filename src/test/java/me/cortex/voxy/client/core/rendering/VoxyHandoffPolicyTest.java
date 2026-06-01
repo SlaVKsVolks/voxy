@@ -56,6 +56,10 @@ public final class VoxyHandoffPolicyTest {
         assertSodiumCompatibleProviderBoundaryExists();
         assertSodiumCompatibleProviderIsRuntimeAuthority();
         assertProviderIsProductionRenderAuthority();
+        assertProviderCoverageRequiresRenderOwnedBoundaryMesh();
+        assertProviderCurrentRefreshDoesNotRetainStaleGaps();
+        assertProviderCurrentRefreshDoesNotInventSolidPassOwnership();
+        assertProviderRejectedMeshCommitIsDiagnosticFailure();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -829,12 +833,22 @@ public final class VoxyHandoffPolicyTest {
         if (cutoutProvider.shouldRenderDuringSodiumPass(VoxyTerrainPass.CUTOUT)) {
             throw new AssertionError("CUTOUT provider geometry must stay disabled until independent CUTOUT dispatch is proven");
         }
+        if (VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(cutoutProvider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("CUTOUT-only provider geometry must not pass production render authority while CUTOUT is unsupported");
+        }
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(cutoutProvider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("CUTOUT-only provider geometry must not produce no-gap while CUTOUT is unsupported");
+        }
         if (cutoutProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
             throw new AssertionError("CUTOUT provider geometry must not enter the SOLID production render list");
         }
         VoxyProviderDrawDecision cutoutDecision = cutoutProvider.drawDecision(VoxyTerrainPass.CUTOUT);
         if (cutoutDecision.draw()) {
             throw new AssertionError("CUTOUT provider geometry must not draw before the independent CUTOUT render list is supported");
+        }
+        cutoutProvider.recordRenderedPass(VoxyTerrainPass.CUTOUT);
+        if (!VoxyFarTerrainProvider.FAIL_UNSUPPORTED_PASS_RENDERED.equals(cutoutProvider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Rendering CUTOUT before independent support must fail provider authority");
         }
 
         VoxyFarTerrainProvider mixedProvider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
@@ -1016,6 +1030,171 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/resources/assets/voxy/shaders/lod/gl46/cmdgen.comp"),
                 "providerDrawCutoutBuffers",
                 "Provider command generation must be able to suppress CUTOUT buffers during SOLID passes");
+    }
+
+    private static void assertProviderCurrentRefreshDoesNotRetainStaleGaps() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long staleMissingSection = WorldEngine.getWorldSectionId(0, 20, 0, 20);
+        long currentExactSection = WorldEngine.getWorldSectionId(0, 4, 0, 4);
+        VoxyTerrainOwnershipCell currentExactCell = new VoxyTerrainOwnershipCell(
+                8,
+                8,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(currentExactSection, currentExactCell, 91, 1L);
+        provider.recordBoundaryMissingSection(staleMissingSection);
+        if (!VoxyFarTerrainProvider.FAIL_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("A recorded boundary miss must fail terrain coverage before the current refresh");
+        }
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(
+                currentExactSection,
+                currentExactCell,
+                91,
+                1L
+        );
+        provider.finishCurrentOwnershipRefresh();
+
+        if (provider.diagnostics().boundaryMissingRequiredCells() != 0) {
+            throw new AssertionError("Current provider coverage refresh must not retain stale boundary misses");
+        }
+        if (!VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Current render-owned coverage must replace stale missing coverage in diagnostics");
+        }
+        if (!provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Current render-owned coverage must produce a provider render-list draw decision");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshDoesNotInventSolidPassOwnership() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long unknownPassSection = WorldEngine.getWorldSectionId(0, 5, 0, 5);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                8,
+                8,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(unknownPassSection, exactCell, 92, 1L);
+        provider.finishCurrentOwnershipRefresh();
+
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Current refresh must not invent SOLID provider ownership for unknown pass geometry");
+        }
+        if (VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Unknown pass geometry must not pass provider render authority");
+        }
+    }
+
+    private static void assertProviderRejectedMeshCommitIsDiagnosticFailure() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(
+                WorldEngine.getWorldSectionId(0, 6, 0, 0),
+                exactCell,
+                93,
+                1L,
+                VoxyProviderRenderCell.PASS_SOLID | VoxyProviderRenderCell.PASS_CUTOUT
+        );
+
+        if (provider.diagnostics().boundaryRejectedSections() == 0) {
+            throw new AssertionError("Rejected mixed-pass provider mesh commits must count as boundary rejections");
+        }
+        if (provider.diagnostics().unsupportedPassSkips() == 0) {
+            throw new AssertionError("Rejected mixed-pass provider mesh commits must count unsupported pass skips");
+        }
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Rejected mixed-pass provider mesh commits must not produce no-gap");
+        }
+        if (VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Rejected mixed-pass provider mesh commits must not pass render authority");
+        }
+    }
+
+    private static void assertProviderCoverageRequiresRenderOwnedBoundaryMesh() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        provider.recordBoundarySource(
+                me.cortex.voxy.common.voxelization.VoxelizedSection.SourceKind.REAL_CHUNK,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.LightSourceKind.REAL_LIGHT,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.Confidence.HIGH
+        );
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Trusted source metadata alone must not produce a no-gap terrain verdict");
+        }
+        provider.recordBoundaryExactSection(501L);
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Boundary counters without provider-owned mesh ids must not produce a no-gap verdict");
+        }
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(501L, exactCell, 501, 1L);
+        if (!VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("A trusted exact boundary mesh owned by the provider must produce a no-gap verdict");
+        }
+        if (!provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("A trusted exact boundary mesh owned by the provider must be drawable");
+        }
+        provider.beginCurrentOwnershipRefresh();
+        provider.finishCurrentOwnershipRefresh();
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("A stale render index without current boundary ownership must not produce no-gap");
+        }
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("A stale render index without current boundary ownership must not draw");
+        }
     }
 
     private static String readSource(Path sourcePath) {

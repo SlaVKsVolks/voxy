@@ -338,9 +338,7 @@ public final class VoxyFarTerrainProvider {
         VoxyProviderMeshApproval approval = this.approveMesh(sectionKey, cell, meshId, requestEpoch, passMask);
         if (!approval.approved()) {
             this.renderIndex.remove(sectionKey);
-            if (approval.ownership() == VoxyTerrainOwnership.REJECTED_INVALID) {
-                this.invalidRejectedCells.incrementAndGet();
-            }
+            this.recordRejectedMeshCommit(sectionKey, approval);
             this.refreshBoundaryDiagnostics();
             return;
         }
@@ -361,9 +359,7 @@ public final class VoxyFarTerrainProvider {
     }
 
     public void beginCurrentOwnershipRefresh() {
-        this.boundaryCoverage.entrySet().removeIf(entry ->
-                entry.getValue() == BoundaryCoverageState.EXACT
-                        || entry.getValue() == BoundaryCoverageState.FALLBACK);
+        this.boundaryCoverage.clear();
     }
 
     public void recordCurrentOwnershipDecision(long sectionKey, VoxyTerrainOwnershipCell cell) {
@@ -378,7 +374,7 @@ public final class VoxyFarTerrainProvider {
     public void recordCurrentRenderCell(long sectionKey, VoxyTerrainOwnershipCell cell, int meshId, long requestEpoch) {
         this.recordCurrentOwnershipDecision(sectionKey, cell);
         if (cell.rendersVoxyGeometry() && meshId >= 0) {
-            int passMask = this.renderIndex.passMaskForSection(sectionKey, VoxyProviderRenderCell.PASS_SOLID);
+            int passMask = this.renderIndex.passMaskForSection(sectionKey, 0);
             VoxyProviderRenderIndex.RecordResult recordResult = this.renderIndex.record(new VoxyProviderRenderCell(
                     sectionKey,
                     meshId,
@@ -608,10 +604,11 @@ public final class VoxyFarTerrainProvider {
                 || !this.snapshot().hasMergedDistanceOwnership()) {
             return UNKNOWN_NO_BOUNDARY_REQUESTS;
         }
-        if (this.renderIndex.renderOwnedSections() > 0) {
+        long currentBoundaryCoverage = currentBoundaryExactSections + currentBoundaryParentFallbackSections;
+        if (currentBoundaryCoverage > 0 && this.productionSupportedRenderOwnedSections() > 0) {
             return PASS_PROVIDER_RENDER_AUTHORITY;
         }
-        if (currentBoundaryExactSections + currentBoundaryParentFallbackSections > 0) {
+        if (currentBoundaryCoverage > 0 || this.renderIndex.renderOwnedSections() > 0) {
             return FAIL_GAP;
         }
         return UNKNOWN_NO_BOUNDARY_REQUESTS;
@@ -639,11 +636,12 @@ public final class VoxyFarTerrainProvider {
         if (FAIL_UNTRUSTED_SOURCE.equals(visualSourceVerdict)) {
             return FAIL_UNTRUSTED_SOURCE;
         }
-        if (currentBoundaryExactSections + currentBoundaryParentFallbackSections > 0) {
+        long currentBoundaryCoverage = currentBoundaryExactSections + currentBoundaryParentFallbackSections;
+        if (currentBoundaryCoverage > 0 && this.productionSupportedRenderOwnedSections() > 0) {
             return PASS_NO_GAP;
         }
-        if (this.boundarySourceSections() > 0) {
-            return PASS_NO_GAP;
+        if (currentBoundaryCoverage > 0 || this.renderIndex.renderOwnedSections() > 0) {
+            return FAIL_GAP;
         }
         return UNKNOWN_NO_BOUNDARY_REQUESTS;
     }
@@ -671,6 +669,30 @@ public final class VoxyFarTerrainProvider {
                 + this.boundarySourceSurfacePreviewSections.get()
                 + this.boundarySourceSyntheticPreviewSections.get()
                 + this.boundarySourceUnknownSections.get();
+    }
+
+    private void recordRejectedMeshCommit(long sectionKey, VoxyProviderMeshApproval approval) {
+        VoxyTerrainFailureReason reason = approval.reason();
+        if (reason == VoxyTerrainFailureReason.MISSING_EXACT_CHILD) {
+            this.boundaryMissingSections.incrementAndGet();
+            this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.MISSING);
+            return;
+        }
+        if (reason == VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED) {
+            this.unsupportedPassSkips.incrementAndGet();
+        }
+        this.invalidRejectedCells.incrementAndGet();
+        if (approval.ownership() == VoxyTerrainOwnership.REJECTED_INVALID) {
+            return;
+        }
+        this.boundaryRejectedSections.incrementAndGet();
+        this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.REJECTED);
+    }
+
+    private long productionSupportedRenderOwnedSections() {
+        return this.supportsIndependentDrawPass(VoxyTerrainPass.SOLID)
+                ? this.renderIndex.sectionsForPass(VoxyTerrainPass.SOLID)
+                : 0;
     }
 
     private boolean supportsIndependentDrawPass(VoxyTerrainPass pass) {

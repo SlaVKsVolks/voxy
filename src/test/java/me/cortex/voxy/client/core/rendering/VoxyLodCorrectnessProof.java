@@ -16,6 +16,7 @@ import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnershipMap;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainPass;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainTileValidator;
 import me.cortex.voxy.common.VoxyHandoffPolicy;
+import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.other.MipperRepresentativePolicy;
 
 import java.nio.ByteBuffer;
@@ -420,14 +421,32 @@ public final class VoxyLodCorrectnessProof {
             }
         }
 
+        VoxyTerrainOwnershipCell exactRenderCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        VoxyTerrainOwnershipCell fallbackRenderCell = new VoxyTerrainOwnershipCell(
+                7,
+                0,
+                1,
+                VoxyTerrainOwnership.VOXY_PARENT_FALLBACK,
+                VoxyTerrainFailureReason.VALID_PARENT_FALLBACK
+        );
+
         VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(snapshot);
         provider.recordBoundarySource(
                 me.cortex.voxy.common.voxelization.VoxelizedSection.SourceKind.REAL_CHUNK,
                 me.cortex.voxy.common.voxelization.VoxelizedSection.LightSourceKind.REAL_LIGHT,
                 me.cortex.voxy.common.voxelization.VoxelizedSection.Confidence.HIGH
         );
-        provider.classifyAndRecordChunk(6, 0, 6, true, false, false);
-        provider.classifyAndRecordChunk(7, 0, 7, false, true, false);
+        if (VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            failures.add("coverage: trusted source metadata produced no-gap without render-owned geometry");
+        }
+        provider.recordCommittedMesh(WorldEngine.getWorldSectionId(0, 6, 0, 0), exactRenderCell, 61, 1L);
+        provider.recordCommittedMesh(WorldEngine.getWorldSectionId(1, 3, 0, 0), fallbackRenderCell, 62, 2L);
         if (!VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage: provider did not produce no-gap verdict");
         }
@@ -437,7 +456,8 @@ public final class VoxyLodCorrectnessProof {
         if (!"PASS".equals(provider.diagnostics().sodiumMaterialParityVerdict())) {
             failures.add("palette: provider failed material parity with only valid opaque terrain");
         }
-        provider.recordBoundaryMissingSection(42L);
+        long fallbackRecoverySection = WorldEngine.getWorldSectionId(1, 4, 0, 0);
+        provider.recordBoundaryMissingSection(fallbackRecoverySection);
         if (!VoxyFarTerrainProvider.FAIL_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage:" + VoxyTerrainFailureReason.MISSING_EXACT_CHILD
                     + ": provider passed despite a required boundary miss");
@@ -446,7 +466,7 @@ public final class VoxyLodCorrectnessProof {
             failures.add("coverage:" + VoxyTerrainFailureReason.MISSING_EXACT_CHILD
                     + ": provider did not expose the required boundary miss count");
         }
-        provider.recordBoundaryParentFallbackSection(42L);
+        provider.recordCommittedMesh(fallbackRecoverySection, fallbackRenderCell, 63, 3L);
         if (!VoxyFarTerrainProvider.PASS_NO_GAP.equals(provider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage:" + VoxyTerrainFailureReason.VALID_PARENT_FALLBACK
                     + ": provider did not clear a current miss when parent fallback became available");
@@ -457,16 +477,17 @@ public final class VoxyLodCorrectnessProof {
         }
 
         VoxyFarTerrainProvider currentStateProvider = new VoxyFarTerrainProvider(snapshot);
-        currentStateProvider.recordBoundaryRejectedSection(88L);
+        long exactRecoverySection = WorldEngine.getWorldSectionId(0, 8, 0, 0);
+        currentStateProvider.recordBoundaryRejectedSection(exactRecoverySection);
         if (!VoxyFarTerrainProvider.FAIL_UNTRUSTED_SOURCE.equals(currentStateProvider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage:" + VoxyTerrainFailureReason.UNTRUSTED_SOURCE
                     + ": provider did not fail while a boundary section was rejected");
         }
-        currentStateProvider.recordBoundaryExactSection(88L);
+        currentStateProvider.recordCommittedMesh(exactRecoverySection, exactRenderCell, 88, 4L);
         if (!VoxyFarTerrainProvider.PASS_NO_GAP.equals(currentStateProvider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage: provider did not replace a rejected boundary section with exact coverage");
         }
-        currentStateProvider.invalidateSection(88L);
+        currentStateProvider.invalidateSection(exactRecoverySection);
         if (!VoxyFarTerrainProvider.UNKNOWN_NO_BOUNDARY_REQUESTS.equals(currentStateProvider.diagnostics().terrainCoverageVerdict())) {
             failures.add("coverage: provider did not clear stale coverage after invalidation");
         }
@@ -519,20 +540,6 @@ public final class VoxyLodCorrectnessProof {
         }
 
         VoxyFarTerrainProvider listProvider = new VoxyFarTerrainProvider(snapshot);
-        VoxyTerrainOwnershipCell exactRenderCell = new VoxyTerrainOwnershipCell(
-                6,
-                0,
-                0,
-                VoxyTerrainOwnership.VOXY_EXACT_LOD,
-                VoxyTerrainFailureReason.NONE
-        );
-        VoxyTerrainOwnershipCell fallbackRenderCell = new VoxyTerrainOwnershipCell(
-                7,
-                0,
-                1,
-                VoxyTerrainOwnership.VOXY_PARENT_FALLBACK,
-                VoxyTerrainFailureReason.VALID_PARENT_FALLBACK
-        );
         VoxyTerrainOwnershipCell rejectedRenderCell = new VoxyTerrainOwnershipCell(
                 8,
                 0,
@@ -572,6 +579,27 @@ public final class VoxyLodCorrectnessProof {
         listProvider.invalidateSection(101L);
         if (listProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
             failures.add("mesh: provider render list still drew after all approved mesh ids were invalidated");
+        }
+
+        VoxyFarTerrainProvider mixedRejectedProvider = new VoxyFarTerrainProvider(snapshot);
+        mixedRejectedProvider.recordCommittedMesh(
+                WorldEngine.getWorldSectionId(0, 9, 0, 0),
+                exactRenderCell,
+                15,
+                5L,
+                VoxyProviderRenderCell.PASS_SOLID | VoxyProviderRenderCell.PASS_CUTOUT
+        );
+        if (mixedRejectedProvider.diagnostics().boundaryRejectedSections() == 0) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": mixed-pass boundary mesh rejection was not diagnosed");
+        }
+        if (mixedRejectedProvider.diagnostics().unsupportedPassSkips() == 0) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": mixed-pass boundary mesh rejection did not count unsupported pass skip");
+        }
+        if (mixedRejectedProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": mixed-pass boundary mesh entered the provider render list");
         }
     }
 
