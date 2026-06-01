@@ -87,6 +87,13 @@ public class SaveLoadSystem3 {
     }
 
     public static boolean deserialize(WorldSection section, MemoryBuffer data) {
+        long fixedPayloadBytes = 16L + WorldSection.SECTION_VOLUME * 2L;
+        if (data == null || data.size < fixedPayloadBytes) {
+            Logger.warn("Dropping serialized section too short for fixed header/index data: "
+                    + (data == null ? -1L : data.size)
+                    + " expected_at_least=" + fixedPayloadBytes);
+            return false;
+        }
         long ptr = data.address;
         long key = MemoryUtil.memGetLong(ptr); ptr += 8;
 
@@ -97,6 +104,15 @@ public class SaveLoadSystem3 {
         }
 
         final long metadata = MemoryUtil.memGetLong(ptr); ptr += 8;
+        int lutEntryCount = (int) (metadata & 0xFFFF);
+        long expectedPayloadBytes = fixedPayloadBytes + (long) lutEntryCount * 8L;
+        if (lutEntryCount <= 0 || expectedPayloadBytes > data.size) {
+            Logger.warn("Dropping serialized section with invalid LUT bounds: lutEntryCount="
+                    + lutEntryCount
+                    + " serialized_bytes=" + data.size
+                    + " expected_bytes=" + expectedPayloadBytes);
+            return false;
+        }
         int storageVersion = (int) ((metadata >>> 56) & 0xFF);
         if (storageVersion != STORAGE_VERSION) {
             Logger.warn("Dropping stale Voxy section "
@@ -125,7 +141,15 @@ public class SaveLoadSystem3 {
 
         final var blockData = section.data;
         for (int i = 0; i < WorldSection.SECTION_VOLUME; i++) {
-            blockData[i] = MemoryUtil.memGetLong(lutBasePtr + Short.toUnsignedLong(MemoryUtil.memGetShort(ptr)) * 8L);ptr += 2;
+            int lutIndex = Short.toUnsignedInt(MemoryUtil.memGetShort(ptr));
+            if (lutIndex >= lutEntryCount) {
+                Logger.warn("Dropping serialized section with invalid per-voxel LUT index: lutIndex="
+                        + lutIndex
+                        + " lutEntryCount=" + lutEntryCount
+                        + " voxel=" + i);
+                return false;
+            }
+            blockData[i] = MemoryUtil.memGetLong(lutBasePtr + (long) lutIndex * 8L);ptr += 2;
         }
 
         if (section.lvl == 0) {
@@ -136,7 +160,7 @@ public class SaveLoadSystem3 {
             section.nonEmptyBlockCount = WorldSection.SECTION_VOLUME-emptyBlockCount;
         }
 
-        ptr = lutBasePtr + (metadata & 0xFFFF) * 8L;
+        ptr = lutBasePtr + (long) lutEntryCount * 8L;
         return true;
     }
 

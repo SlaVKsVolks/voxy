@@ -406,8 +406,7 @@ public final class VoxyFarTerrainProvider {
             this.recordUnsupportedPass(pass);
             return false;
         }
-        return this.snapshot().sodiumChunkRenderingEnabled()
-                && this.snapshot().hasMergedDistanceOwnership();
+        return this.isSodiumProviderPassRenderable(pass);
     }
 
     public boolean shouldDrawProviderGeometry(VoxyTerrainPass pass) {
@@ -416,27 +415,28 @@ public final class VoxyFarTerrainProvider {
 
     public VoxyProviderDrawDecision drawDecision(VoxyTerrainPass pass) {
         VoxyTerrainPass safePass = pass == null ? VoxyTerrainPass.DEBUG : pass;
-        boolean sodiumCompatible = this.shouldRenderDuringSodiumPass(safePass);
+        boolean supportedPass = this.supportsIndependentDrawPass(safePass);
+        boolean sodiumCompatible = supportedPass && this.isSodiumProviderPassRenderable(safePass);
         String authorityVerdict = this.providerRenderAuthorityVerdict();
-        VoxyProviderRenderList renderList = this.supportsIndependentDrawPass(safePass)
+        VoxyProviderRenderList renderList = supportedPass
                 ? this.renderIndex.snapshotForPass(safePass).withAuthorityVerdict(authorityVerdict)
                 : VoxyProviderRenderList.empty(safePass, 0, authorityVerdict);
         this.recordRenderListSnapshot(renderList);
         long sectionCount = renderList.sectionCount();
-        if (!sodiumCompatible) {
-            return VoxyProviderDrawDecision.skip(
-                    safePass,
-                    sectionCount,
-                    authorityVerdict,
-                    VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
-            );
-        }
-        if (!this.supportsIndependentDrawPass(safePass)) {
+        if (!supportedPass) {
             this.recordUnsupportedPass(safePass);
             return VoxyProviderDrawDecision.skip(
                     safePass,
                     sectionCount,
                     this.providerRenderAuthorityVerdict(),
+                    VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+            );
+        }
+        if (!sodiumCompatible) {
+            return VoxyProviderDrawDecision.skip(
+                    safePass,
+                    sectionCount,
+                    authorityVerdict,
                     VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
             );
         }
@@ -677,6 +677,12 @@ public final class VoxyFarTerrainProvider {
         return pass == VoxyTerrainPass.SOLID;
     }
 
+    private boolean isSodiumProviderPassRenderable(VoxyTerrainPass pass) {
+        return this.supportsIndependentDrawPass(pass)
+                && this.snapshot().sodiumChunkRenderingEnabled()
+                && this.snapshot().hasMergedDistanceOwnership();
+    }
+
     private void applyRenderIndexRecordResult(long incomingSectionKey, VoxyProviderRenderIndex.RecordResult recordResult) {
         if (recordResult.suppressedIncomingParent()) {
             this.parentSuppressedSections.incrementAndGet();
@@ -726,14 +732,22 @@ public final class VoxyFarTerrainProvider {
     }
 
     private static BoundaryCoverageState mergeBoundaryCoverage(BoundaryCoverageState previous, BoundaryCoverageState incoming) {
-        if (previous == BoundaryCoverageState.EXACT || incoming == BoundaryCoverageState.EXACT) {
+        if (incoming == BoundaryCoverageState.EXACT) {
             return BoundaryCoverageState.EXACT;
         }
-        if (previous == BoundaryCoverageState.FALLBACK || incoming == BoundaryCoverageState.FALLBACK) {
-            return BoundaryCoverageState.FALLBACK;
+        if (incoming == BoundaryCoverageState.FALLBACK) {
+            return previous == BoundaryCoverageState.EXACT
+                    ? BoundaryCoverageState.EXACT
+                    : BoundaryCoverageState.FALLBACK;
         }
-        if (previous == BoundaryCoverageState.REJECTED || incoming == BoundaryCoverageState.REJECTED) {
-            return BoundaryCoverageState.REJECTED;
+        if (incoming == BoundaryCoverageState.REJECTED || incoming == BoundaryCoverageState.MISSING) {
+            return incoming;
+        }
+        if (previous == BoundaryCoverageState.EXACT) {
+            return BoundaryCoverageState.EXACT;
+        }
+        if (previous == BoundaryCoverageState.FALLBACK) {
+            return BoundaryCoverageState.FALLBACK;
         }
         return BoundaryCoverageState.MISSING;
     }

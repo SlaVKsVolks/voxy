@@ -646,6 +646,14 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/java/me/cortex/voxy/common/world/SaveLoadSystem3.java"),
                 "lutIndex >= lutEntryCount",
                 "Section deserialization must reject per-voxel LUT indices outside the decoded LUT");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodTileStore.java"),
+                "implements AutoCloseable",
+                "Server LoD tile stores with mounted region/compact sources must expose deterministic close");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/serverlod/ClientServerLodSync.java"),
+                "oldCache.close()",
+                "Client server-LoD cache swaps must close the previous mounted store");
     }
 
     private static void assertSodiumCompatibleProviderBoundaryExists() {

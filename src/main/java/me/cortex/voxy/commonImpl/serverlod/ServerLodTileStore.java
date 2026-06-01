@@ -16,7 +16,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-public final class ServerLodTileStore {
+public final class ServerLodTileStore implements AutoCloseable {
     private final Path root;
     private final Path blobDir;
     private final Path indexDir;
@@ -320,6 +320,22 @@ public final class ServerLodTileStore {
         } catch (IOException e) {
             Logger.error("Failed to store Voxy server LoD tile " + metadata.key().stableId() + ": " + e.getMessage());
             return StoreResult.REJECTED_IO_ERROR;
+        }
+    }
+
+    @Override
+    public void close() {
+        if (this.vlcp3RegionStore != null) {
+            this.vlcp3RegionStore.close();
+        }
+        if (this.compactWorld != null) {
+            try {
+                this.compactWorld.free();
+            } catch (RuntimeException exception) {
+                Logger.warn("Failed to close compact Voxy world for server LoD store " + this.root + ": " + exception.getMessage());
+            }
+        } else if (this.compactStorage != null) {
+            this.compactStorage.close();
         }
     }
 

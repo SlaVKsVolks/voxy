@@ -480,6 +480,11 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
                 : renderList;
         int[] safeMeshIds = safeList.meshIds();
         Arrays.sort(safeMeshIds);
+        int maxListCount = this.providerRenderListCapacity();
+        if (safeMeshIds.length > maxListCount) {
+            Logger.warn("Truncating Voxy provider render list from " + safeMeshIds.length + " to " + maxListCount + " mesh ids");
+            safeMeshIds = Arrays.copyOf(safeMeshIds, maxListCount);
+        }
         if (this.providerRenderListEnabled
                 && this.providerRenderListEpoch == safeList.epoch()
                 && this.providerRenderListPass == safeList.pass()
@@ -531,6 +536,10 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             }
         }
         UploadStream.INSTANCE.commit();
+    }
+
+    private int providerRenderListCapacity() {
+        return (int) ((this.providerRenderList.size() / 4L) - 3L);
     }
 
     private static int providerRenderListPassMask(VoxyTerrainPass pass) {
