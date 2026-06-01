@@ -984,6 +984,48 @@ public final class VoxyLodCorrectnessProof {
         if (rejectsFluidOverride) {
             failures.add("mipper: foliage canopy policy overrode a fluid-containing preview tile");
         }
+        boolean realChunkSurfacePolicy = MipperRepresentativePolicy.shouldPreferSkyExposedSurface(
+                me.cortex.voxy.common.voxelization.VoxelizedSection.SourceKind.REAL_CHUNK,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.Confidence.HIGH,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.LightSourceKind.REAL_LIGHT,
+                true,
+                0,
+                15,
+                true,
+                0,
+                0
+        );
+        if (!realChunkSurfacePolicy) {
+            failures.add("mipper: trusted real chunk far-terrain mip can still prefer buried dark blocks over sky-exposed surface");
+        }
+        boolean missingLightSurfacePolicy = MipperRepresentativePolicy.shouldPreferSkyExposedSurface(
+                me.cortex.voxy.common.voxelization.VoxelizedSection.SourceKind.REAL_CHUNK,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.Confidence.HIGH,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.LightSourceKind.MISSING_SKY_LIGHT,
+                true,
+                0,
+                15,
+                true,
+                0,
+                0
+        );
+        if (missingLightSurfacePolicy) {
+            failures.add("mipper: missing-light real chunk selected sky-exposed surface without trusted light");
+        }
+        boolean fluidSurfacePolicy = MipperRepresentativePolicy.shouldPreferSkyExposedSurface(
+                me.cortex.voxy.common.voxelization.VoxelizedSection.SourceKind.REAL_CHUNK,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.Confidence.HIGH,
+                me.cortex.voxy.common.voxelization.VoxelizedSection.LightSourceKind.REAL_LIGHT,
+                true,
+                0,
+                15,
+                true,
+                1,
+                0
+        );
+        if (fluidSurfacePolicy) {
+            failures.add("mipper: real chunk sky-exposed policy overrode fluid-containing terrain");
+        }
     }
 
     private static void assertRuntimeMeshValidationPolicy(List<String> failures) {

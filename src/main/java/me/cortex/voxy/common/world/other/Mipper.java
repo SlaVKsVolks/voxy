@@ -195,6 +195,11 @@ public class Mipper {
         VoxelizedSection.LightSourceKind safeLightSourceKind = lightSourceKind == null ? VoxelizedSection.LightSourceKind.UNKNOWN : lightSourceKind;
         boolean surfacePreview = safeSourceKind == VoxelizedSection.SourceKind.SURFACE_PREVIEW
                 || safeSourceKind == VoxelizedSection.SourceKind.SYNTHETIC_PREVIEW;
+        boolean surfaceRepresentativePolicy = MipperRepresentativePolicy.shouldUseSurfaceRepresentativePolicy(
+                safeSourceKind,
+                safeConfidence,
+                safeLightSourceKind
+        );
         boolean lowConfidencePreview = surfacePreview && !safeConfidence.atLeast(VoxelizedSection.Confidence.MEDIUM);
         MaterialClass bestMaterial = materialClass(mapper.getBlockStateFromBlockId(bestBlockId));
 
@@ -202,15 +207,15 @@ public class Mipper {
             best = firstVisibleNonAir;
             bestBlockId = Mapper.getBlockId(best);
             bestMaterial = materialClass(mapper.getBlockStateFromBlockId(bestBlockId));
-            if (surfacePreview) {
+            if (surfaceRepresentativePolicy) {
                 RenderCorrectnessDiagnostics.mipperRepresentative(
                         "air_over_surface_rejected",
-                        "surface_preview_visible_non_air_selected"
+                        "surface_representative_visible_non_air_selected"
                 );
             }
         }
         if (MipperRepresentativePolicy.shouldPreferFoliageCanopyOverSolid(
-                surfacePreview,
+                surfaceRepresentativePolicy,
                 foliageSamples,
                 solidSamples,
                 fluidSamples,
@@ -224,29 +229,32 @@ public class Mipper {
                 bestMaterial = MaterialClass.FOLIAGE;
                 RenderCorrectnessDiagnostics.mipperRepresentative(
                         "buried_solid_over_foliage_rejected",
-                        "surface_preview_foliage_canopy_selected"
+                        "surface_representative_foliage_canopy_selected"
                 );
             }
         }
-        boolean preferSkyExposedSurface = !Mapper.isAir(best)
-                && bestSkyExposedNonAir != Mapper.AIR
-                && ((Mapper.getLightId(best) & 0x0F) < 4
-                || safeLightSourceKind == VoxelizedSection.LightSourceKind.SYNTHETIC_SURFACE_PREVIEW);
-        if (!preferSkyExposedSurface && surfacePreview && bestSkyExposedNonAir != Mapper.AIR) {
-            int bestSky = Mapper.getLightId(best) & 0x0F;
-            int exposedSky = Mapper.getLightId(bestSkyExposedNonAir) & 0x0F;
-            preferSkyExposedSurface = (bestMaterial == MaterialClass.SOLID
-                    || bestMaterial == MaterialClass.TRANSLUCENT
-                    || bestMaterial == MaterialClass.FOLIAGE)
-                    && exposedSky > bestSky + 2
-                    && fluidSamples == 0
-                    && emissiveSamples == 0;
-        }
+        int bestSky = Mapper.getLightId(best) & 0x0F;
+        int exposedSky = Mapper.getLightId(bestSkyExposedNonAir) & 0x0F;
+        boolean bestCanRepresentSurface = !Mapper.isAir(best)
+                && (bestMaterial == MaterialClass.SOLID
+                || bestMaterial == MaterialClass.TRANSLUCENT
+                || bestMaterial == MaterialClass.FOLIAGE);
+        boolean preferSkyExposedSurface = MipperRepresentativePolicy.shouldPreferSkyExposedSurface(
+                safeSourceKind,
+                safeConfidence,
+                safeLightSourceKind,
+                bestCanRepresentSurface,
+                bestSky,
+                exposedSky,
+                bestSkyExposedNonAir != Mapper.AIR,
+                fluidSamples,
+                emissiveSamples
+        );
         if (preferSkyExposedSurface) {
             best = bestSkyExposedNonAir;
             bestBlockId = Mapper.getBlockId(best);
             bestMaterial = materialClass(mapper.getBlockStateFromBlockId(bestBlockId));
-            if (surfacePreview) {
+            if (surfaceRepresentativePolicy) {
                 RenderCorrectnessDiagnostics.mipperRepresentative(
                         "buried_shell_over_surface_rejected",
                         "brighter_sky_exposed_surface_selected"
@@ -285,13 +293,13 @@ public class Mipper {
             return withLight(best, averageLightForAllAir(cache));
         }
         BlockState bestState = mapper.getBlockStateFromBlockId(bestBlockId);
-        if (surfacePreview
+        if (surfaceRepresentativePolicy
                 && bestMaterial == MaterialClass.SOLID
                 && foliageSamples >= 2
                 && (Mapper.getLightId(best) & 0x0F) < 8) {
             RenderCorrectnessDiagnostics.mipperRepresentative(
                     "ore_leak_surface_representative",
-                    "surface_preview_dark_solid_selected_with_visible_foliage"
+                    "surface_representative_dark_solid_selected_with_visible_foliage"
             );
         }
         if (shouldSuppressSparsePreviewBlock(bestState, nonAirSamples, solidSamples, fluidSamples, foliageSamples, iceSamples, lowConfidencePreview)) {
