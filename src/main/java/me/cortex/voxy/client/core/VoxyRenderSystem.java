@@ -388,6 +388,25 @@ public class VoxyRenderSystem {
         this.renderOpaqueInternal(viewport);
     }
 
+    public boolean usesSodiumProviderRenderAuthority() {
+        return this.farTerrainProvider != null
+                && this.farTerrainProvider.snapshot().hasMergedDistanceOwnership()
+                && VoxyClient.sodiumChunkRenderingEnabled();
+    }
+
+    public void renderLegacySodiumTail(Viewport<?> viewport) {
+        if (this.usesSodiumProviderRenderAuthority()) {
+            RenderCorrectnessDiagnostics.call(
+                    "sodium_provider",
+                    "legacy_tail_render",
+                    "skip",
+                    "provider_render_authority_active"
+            );
+            return;
+        }
+        this.renderOpaque(viewport);
+    }
+
     private void renderProviderOpaque(Viewport<?> viewport, VoxyProviderDrawDecision drawDecision) {
         this.pipeline.setProviderRenderList(drawDecision.renderList());
         this.renderOpaqueInternal(viewport);

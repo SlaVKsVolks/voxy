@@ -810,6 +810,18 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/java/me/cortex/voxy/client/core/VoxyRenderSystem.java"),
                 "getRendererProviderTraversalBypassCount",
                 "Provider traversal-bypass count must be exposed for diagnostics");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/mixin/sodium/MixinSodiumWorldRendererVS.java"),
+                "renderLegacySodiumTail",
+                "Sodium tail hook must route through a provider-aware legacy traversal gate");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/VoxyRenderSystem.java"),
+                "usesSodiumProviderRenderAuthority",
+                "Provider authority mode must be explicit so legacy Sodium tail traversal can be suppressed");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/VoxyRenderSystem.java"),
+                "provider_render_authority_active",
+                "Legacy Sodium tail traversal must be skipped while provider-owned render lists are authoritative");
     }
 
     private static void assertProviderDrawAuthorityContract() {

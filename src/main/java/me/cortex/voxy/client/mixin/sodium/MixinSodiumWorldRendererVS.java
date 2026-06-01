@@ -52,7 +52,7 @@ public class MixinSodiumWorldRendererVS {
                 } else {
                     viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), x, y, z);
                 }
-                renderer.renderOpaque(viewport);
+                renderer.renderLegacySodiumTail(viewport);
             }
         }
     }
