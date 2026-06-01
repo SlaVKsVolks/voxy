@@ -52,6 +52,7 @@ public final class VoxyHandoffPolicyTest {
         assertServerLodSyncUsesExactTileCacheIdentity();
         assertServerLodSyncRemountsWorldStore();
         assertProductionHardeningIssuesAreClosed();
+        assertMillionDollarProductionBlockersAreClosed();
         assertSodiumCompatibleProviderBoundaryExists();
         assertSodiumCompatibleProviderIsRuntimeAuthority();
         assertProviderIsProductionRenderAuthority();
@@ -606,6 +607,45 @@ public final class VoxyHandoffPolicyTest {
                 serviceManager,
                 "public synchronized void shutdown()",
                 "ServiceManager shutdown must be synchronized so concurrent shutdown cannot race");
+    }
+
+    private static void assertMillionDollarProductionBlockersAreClosed() {
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/VoxyClient.java"),
+                "voxy.allowHarnessVoxyOnlyMode",
+                "voxy_only must be an explicit harness-only opt-in and must not disable Sodium in normal gameplay");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/VoxyClient.java"),
+                "return isHarnessVoxyOnlyModeAllowed() && \"voxy_only\".equals(visualAttributionMode)",
+                "Sodium chunk rendering must not be disabled by visual attribution mode alone");
+        rejectSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/sodium/provider/VoxyFarTerrainProvider.java"),
+                "boolean sodiumCompatible = this.shouldRenderDuringSodiumPass(safePass);",
+                "Provider draw decisions must not mutate unsupported-pass diagnostics while only deciding");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/sodium/provider/VoxyFarTerrainProvider.java"),
+                "incoming == BoundaryCoverageState.REJECTED || incoming == BoundaryCoverageState.MISSING",
+                "Boundary coverage must fail closed when current coverage reports a rejected or missing section");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/section/backend/mdic/MDICSectionRenderer.java"),
+                "providerRenderListCapacity()",
+                "Provider render-list state must be capped to the actual upload buffer capacity");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/section/backend/mdic/MDICSectionRenderer.java"),
+                "Arrays.copyOf(safeMeshIds, maxListCount)",
+                "Provider render-list truncation must not leave CPU state larger than the GPU list");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/common/world/SaveLoadSystem3.java"),
+                "serialized section too short",
+                "Section deserialization must reject buffers shorter than the fixed section header and index data");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/common/world/SaveLoadSystem3.java"),
+                "lutEntryCount",
+                "Section deserialization must bounds-check LUT entries before unsafe reads");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/common/world/SaveLoadSystem3.java"),
+                "lutIndex >= lutEntryCount",
+                "Section deserialization must reject per-voxel LUT indices outside the decoded LUT");
     }
 
     private static void assertSodiumCompatibleProviderBoundaryExists() {

@@ -103,8 +103,12 @@ public class VoxyClient {
         return 0;
     }
 
+    private static boolean isHarnessVoxyOnlyModeAllowed() {
+        return Boolean.parseBoolean(System.getProperty("voxy.allowHarnessVoxyOnlyMode", "false"));
+    }
+
     public static boolean disableSodiumChunkRender() {
-        return "voxy_only".equals(visualAttributionMode);// getOcclusionDebugState() != 0;
+        return isHarnessVoxyOnlyModeAllowed() && "voxy_only".equals(visualAttributionMode);
     }
 
     public static boolean sodiumChunkRenderingEnabled() {
@@ -126,6 +130,10 @@ public class VoxyClient {
                 && !"noop".equals(normalized)
                 && !"voxy_idbuffer".equals(normalized)
                 && !"voxy_depth_probe".equals(normalized)) {
+            normalized = "normal";
+        }
+        if ("voxy_only".equals(normalized) && !isHarnessVoxyOnlyModeAllowed()) {
+            Logger.warn("Ignoring voxy_only visual attribution mode because voxy.allowHarnessVoxyOnlyMode is not enabled");
             normalized = "normal";
         }
         if (!visualAttributionMode.equals(normalized)) {
