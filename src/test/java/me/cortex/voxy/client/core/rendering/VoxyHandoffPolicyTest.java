@@ -47,6 +47,7 @@ public final class VoxyHandoffPolicyTest {
         assertSparseServerLodMappingsAreImported();
         assertServerAuthoredNeoForgeContractIsExposed();
         assertServerLodCacheSynthesizesUsefulParentsByDefault();
+        assertServerLodSyncAutoBuildsAndRefreshesManifests();
         assertSodiumCompatibleProviderBoundaryExists();
         assertSodiumCompatibleProviderIsRuntimeAuthority();
         assertProviderIsProductionRenderAuthority();
@@ -433,6 +434,31 @@ public final class VoxyHandoffPolicyTest {
                 cacheStorage,
                 "child.getNonEmptyChildren() != 0 || containsNonAir(child)",
                 "Server LoD cache parent synthesis must mark children useful when they contain non-air voxel data");
+    }
+
+    private static void assertServerLodSyncAutoBuildsAndRefreshesManifests() {
+        Path syncManager = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodSyncManager.java");
+        Path builder = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerAuthoredLodBuilder.java");
+        requireSourceContains(
+                syncManager,
+                "ServerAuthoredLodBuilder.ensureCoverage",
+                "Server LoD sync must automatically start authored generation when visible coverage is insufficient");
+        requireSourceContains(
+                syncManager,
+                "payload.requestedRadius()",
+                "Automatic authored LoD generation must derive its bounded radius from the client visual request");
+        requireSourceContains(
+                syncManager,
+                "broadcastManifests",
+                "Server LoD sync must be able to push fresh manifests after authored generation publishes tiles");
+        requireSourceContains(
+                builder,
+                "broadcastManifests(\"authored build finished\")",
+                "Authored LoD builder must refresh connected clients after publishing server tiles");
+        requireSourceContains(
+                builder,
+                "voxy.serverLodAutoBuildRadius",
+                "Automatic authored LoD generation must use a bounded radius instead of the full client request radius");
     }
 
     private static void assertSodiumCompatibleProviderBoundaryExists() {

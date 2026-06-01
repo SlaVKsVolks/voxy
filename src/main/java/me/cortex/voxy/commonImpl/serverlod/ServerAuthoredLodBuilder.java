@@ -10,6 +10,7 @@ import me.cortex.voxy.common.world.service.VoxelIngestService;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunkSection;
@@ -32,12 +33,49 @@ import java.util.Set;
 public final class ServerAuthoredLodBuilder {
     private static final int DEFAULT_CHUNKS_PER_TICK = Integer.getInteger("voxy.serverLodAuthoredChunksPerTick", 8);
     private static final int SMALL_JOB_PREEMPT_CHUNKS = Integer.getInteger("voxy.serverLodAuthoredSmallPreemptChunks", 256);
+    private static final boolean AUTO_BUILD_ENABLED = Boolean.parseBoolean(
+            System.getProperty("voxy.serverLodAutoBuildEnabled", "true"));
+    private static final int AUTO_BUILD_RADIUS = Math.max(
+            0,
+            Integer.getInteger("voxy.serverLodAutoBuildRadius", 64));
+    private static final int AUTO_BUILD_CHUNKS_PER_TICK = Math.max(
+            1,
+            Integer.getInteger("voxy.serverLodAutoBuildChunksPerTick", 128));
     private static final ServerLodNeoForgeContract.ContractSnapshot CONTRACT = ServerLodNeoForgeContract.snapshot();
     private static volatile Job activeJob;
     private static volatile Job lastJob;
     private static final Deque<Job> pausedJobs = new ArrayDeque<>();
 
     private ServerAuthoredLodBuilder() {}
+
+    public static boolean ensureCoverage(ServerPlayer player, int requestedRadiusChunks, String reason) {
+        if (!AUTO_BUILD_ENABLED || player == null) {
+            return false;
+        }
+        if (activeJob != null) {
+            return false;
+        }
+        int radiusChunks = Math.min(Math.max(0, requestedRadiusChunks), AUTO_BUILD_RADIUS);
+        if (radiusChunks <= 0) {
+            return false;
+        }
+        CommandSourceStack source = player.createCommandSourceStack().withPermission(4);
+        String options = "status=light"
+                + " chunksPerTick=" + AUTO_BUILD_CHUNKS_PER_TICK
+                + " publishStore=true"
+                + " shape=circle";
+        int centerX = player.getBlockX() >> 4;
+        int centerZ = player.getBlockZ() >> 4;
+        int code = start(source, centerX, centerZ, radiusChunks, options);
+        if (code > 0) {
+            Logger.info("Started automatic Minecraft-authored Voxy LoD build around player "
+                    + player.getGameProfile().getName()
+                    + " radius=" + radiusChunks
+                    + " reason=" + (reason == null || reason.isBlank() ? "visible coverage insufficient" : reason));
+            return true;
+        }
+        return false;
+    }
 
     public static int start(CommandSourceStack source, int centerX, int centerZ, int radiusChunks, String rawOptions) {
         Options options;
@@ -517,6 +555,9 @@ public final class ServerAuthoredLodBuilder {
                 deleteRecursively(this.deferredStoreRoot);
             }
             writeReport();
+            if (!this.cancelled && this.tilesPublished > 0) {
+                ServerLodSyncManager.broadcastManifests("authored build finished");
+            }
             Logger.info("Finished Minecraft-authored Voxy LoD build: " + statusLine() + " failure=" + this.failure);
         }
 

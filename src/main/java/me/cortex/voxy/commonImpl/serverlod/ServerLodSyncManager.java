@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,6 +19,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class ServerLodSyncManager {
     private static final ConcurrentMap<String, ServerLodSession> SESSIONS = new ConcurrentHashMap<>();
     private static final AtomicLong BATCH_ID = new AtomicLong(1);
+    private static final int AUTO_BUILD_MIN_VISIBLE_TILES = Math.max(
+            0,
+            Integer.getInteger("voxy.serverLodAutoBuildMinVisibleTiles", 512));
     private static volatile ServerLodTileStore store;
     private static volatile int bandwidthMbps = ServerLodConstants.DEFAULT_BANDWIDTH_MBPS;
 
@@ -77,7 +81,14 @@ public final class ServerLodSyncManager {
             return;
         }
         session.currentSyncId = payload.clientSyncId();
-        var manifest = priorityManifest(player, payload.cachedHashes(), ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
+        var visibleManifest = visibleManifest(player, ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
+        if (visibleManifest.size() < AUTO_BUILD_MIN_VISIBLE_TILES) {
+            ServerAuthoredLodBuilder.ensureCoverage(
+                    player,
+                    payload.requestedRadius(),
+                    "visible manifest tiles=" + visibleManifest.size());
+        }
+        var manifest = filterCachedManifest(visibleManifest, payload.cachedHashes(), ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
         PacketDistributor.sendToPlayer(player, new ServerLodPayloads.ServerManifest(
                 ServerLodConstants.PROTOCOL_VERSION,
                 payload.clientSyncId(),
@@ -87,12 +98,28 @@ public final class ServerLodSyncManager {
     }
 
     private static List<ServerLodTileMetadata> priorityManifest(ServerPlayer player, List<String> clientCachedHashes, int limit) {
+        return filterCachedManifest(visibleManifest(player, manifestCandidateLimit(limit, clientCachedHashes)), clientCachedHashes, limit);
+    }
+
+    private static int manifestCandidateLimit(int limit, List<String> clientCachedHashes) {
+        int cachedCount = clientCachedHashes == null ? 0 : clientCachedHashes.size();
+        return limit + Math.min(cachedCount, ServerLodConstants.MAX_CLIENT_MANIFEST_HASHES);
+    }
+
+    private static List<ServerLodTileMetadata> visibleManifest(ServerPlayer player, int limit) {
         String dimension = player.level().dimension().location().toString();
         int playerBlockX = player.getBlockX();
         int playerBlockZ = player.getBlockZ();
-        var cached = new HashSet<>(clientCachedHashes);
-        int candidateLimit = limit + Math.min(cached.size(), ServerLodConstants.MAX_CLIENT_MANIFEST_HASHES);
-        return getStore().priorityManifest(dimension, playerBlockX, playerBlockZ, candidateLimit).stream()
+        return getStore().priorityManifest(dimension, playerBlockX, playerBlockZ, limit);
+    }
+
+    private static List<ServerLodTileMetadata> filterCachedManifest(
+            List<ServerLodTileMetadata> visibleManifest,
+            List<String> clientCachedHashes,
+            int limit
+    ) {
+        var cached = new HashSet<>(clientCachedHashes == null ? List.<String>of() : clientCachedHashes);
+        return visibleManifest.stream()
                 .filter(metadata -> !cached.contains(metadata.contentHash()))
                 .limit(limit)
                 .toList();
@@ -173,6 +200,35 @@ public final class ServerLodSyncManager {
         var payload = new ServerLodPayloads.ServerInvalidate(keys, System.currentTimeMillis(), reason);
         for (var player : server.getPlayerList().getPlayers()) {
             PacketDistributor.sendToPlayer(player, payload);
+        }
+    }
+
+    public static void broadcastManifests(String reason) {
+        var server = ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return;
+        }
+        for (var session : SESSIONS.values()) {
+            if (session.currentSyncId <= 0) {
+                continue;
+            }
+            ServerPlayer player;
+            try {
+                player = server.getPlayerList().getPlayer(UUID.fromString(session.playerId));
+            } catch (IllegalArgumentException ignored) {
+                continue;
+            }
+            if (player == null) {
+                continue;
+            }
+            var manifest = visibleManifest(player, ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
+            PacketDistributor.sendToPlayer(player, new ServerLodPayloads.ServerManifest(
+                    ServerLodConstants.PROTOCOL_VERSION,
+                    session.currentSyncId,
+                    System.currentTimeMillis(),
+                    manifest,
+                    "server LoD manifest: " + manifest.size() + " indexed tiles"
+                            + (reason == null || reason.isBlank() ? "" : " (" + reason + ")")));
         }
     }
 
