@@ -581,6 +581,18 @@ public final class VoxyLodCorrectnessProof {
             failures.add("mesh: provider render list still drew after all approved mesh ids were invalidated");
         }
 
+        VoxyFarTerrainProvider staleListProvider = new VoxyFarTerrainProvider(snapshot);
+        long currentListSection = WorldEngine.getWorldSectionId(0, 11, 0, 0);
+        long staleListSection = WorldEngine.getWorldSectionId(0, 12, 0, 0);
+        staleListProvider.recordCommittedMesh(currentListSection, exactRenderCell, 31, 1L);
+        staleListProvider.recordCommittedMesh(staleListSection, exactRenderCell, 32, 1L);
+        staleListProvider.beginCurrentOwnershipRefresh();
+        staleListProvider.recordCurrentRenderCell(currentListSection, exactRenderCell, 31, 1L);
+        staleListProvider.finishCurrentOwnershipRefresh();
+        if (!Arrays.equals(staleListProvider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {31})) {
+            failures.add("mesh: current provider refresh did not prune stale render-list entries");
+        }
+
         VoxyFarTerrainProvider mixedRejectedProvider = new VoxyFarTerrainProvider(snapshot);
         mixedRejectedProvider.recordCommittedMesh(
                 WorldEngine.getWorldSectionId(0, 9, 0, 0),
