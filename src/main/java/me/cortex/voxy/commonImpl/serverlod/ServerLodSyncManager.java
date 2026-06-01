@@ -82,11 +82,16 @@ public final class ServerLodSyncManager {
         }
         session.currentSyncId = payload.clientSyncId();
         var visibleManifest = visibleManifest(player, ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
-        if (visibleManifest.size() < AUTO_BUILD_MIN_VISIBLE_TILES) {
+        String dimension = player.level().dimension().location().toString();
+        int advertisedReach = getStoreFor(player).maxAdvertisedChunkReach(dimension, player.getBlockX(), player.getBlockZ());
+        int requiredCoverageRadius = ServerAuthoredLodBuilder.automaticCoverageRadius(payload.requestedRadius());
+        if (visibleManifest.size() < AUTO_BUILD_MIN_VISIBLE_TILES || advertisedReach < requiredCoverageRadius) {
             ServerAuthoredLodBuilder.ensureCoverage(
                     player,
                     payload.requestedRadius(),
-                    "visible manifest tiles=" + visibleManifest.size());
+                    "visible manifest tiles=" + visibleManifest.size()
+                            + " advertised_reach=" + advertisedReach
+                            + " required_radius=" + requiredCoverageRadius);
         }
         var manifest = filterCachedManifest(visibleManifest, payload.cachedHashes(), ServerLodConstants.INITIAL_MANIFEST_TILE_LIMIT);
         PacketDistributor.sendToPlayer(player, new ServerLodPayloads.ServerManifest(
@@ -110,7 +115,7 @@ public final class ServerLodSyncManager {
         String dimension = player.level().dimension().location().toString();
         int playerBlockX = player.getBlockX();
         int playerBlockZ = player.getBlockZ();
-        return getStore().priorityManifest(dimension, playerBlockX, playerBlockZ, limit);
+        return getStoreFor(player).priorityManifest(dimension, playerBlockX, playerBlockZ, limit);
     }
 
     private static List<ServerLodTileMetadata> filterCachedManifest(
@@ -120,7 +125,7 @@ public final class ServerLodSyncManager {
     ) {
         var cached = new HashSet<>(clientCachedHashes == null ? List.<String>of() : clientCachedHashes);
         return visibleManifest.stream()
-                .filter(metadata -> !cached.contains(metadata.contentHash()))
+                .filter(metadata -> !cached.contains(ServerLodConstants.tileCacheIdentity(metadata)))
                 .limit(limit)
                 .toList();
     }
@@ -133,8 +138,9 @@ public final class ServerLodSyncManager {
         int maxBytes = Math.max(4096, Math.min(payload.maxBatchBytes(), ServerLodConstants.MAX_TILE_BATCH_BYTES));
         var pending = new ArrayList<ServerLodTile>();
         int pendingRawEstimate = 12;
+        var activeStore = getStoreFor(player);
         for (var key : payload.keys()) {
-            var tile = getStore().read(key);
+            var tile = activeStore.read(key);
             if (tile.isEmpty()) {
                 continue;
             }
@@ -238,7 +244,7 @@ public final class ServerLodSyncManager {
             ServerLodDiagnostics.provisionalUploadsRejected.incrementAndGet();
             return;
         }
-        var result = getStore().store(payload.metadata(), payload.compressedPayload());
+        var result = getStoreFor(player).store(payload.metadata(), payload.compressedPayload());
         if (result == ServerLodTileStore.StoreResult.STORED) {
             ServerLodDiagnostics.provisionalUploadsAccepted.incrementAndGet();
         } else {
@@ -247,16 +253,49 @@ public final class ServerLodSyncManager {
     }
 
     public static ServerLodTileStore getStore() {
+        var desiredRoot = defaultStoreRoot().toAbsolutePath().normalize();
         var active = store;
-        if (active != null) {
+        if (active != null && sameRoot(active.root(), desiredRoot)) {
             return active;
+        }
+        if (active != null && ServerLifecycleHooks.getCurrentServer() == null) {
+            return active;
+        }
+        if (active != null) {
+            synchronized (ServerLodSyncManager.class) {
+                if (store == null || !sameRoot(store.root(), desiredRoot)) {
+                    store = new ServerLodTileStore(desiredRoot);
+                    Logger.info("Mounted Voxy server LoD store: " + desiredRoot);
+                }
+                return store;
+            }
         }
         synchronized (ServerLodSyncManager.class) {
             if (store == null) {
-                store = new ServerLodTileStore(defaultStoreRoot());
+                store = new ServerLodTileStore(desiredRoot);
+                Logger.info("Mounted Voxy server LoD store: " + desiredRoot);
             }
             return store;
         }
+    }
+
+    private static ServerLodTileStore getStoreFor(ServerPlayer player) {
+        var desiredRoot = storeRootFor(player).toAbsolutePath().normalize();
+        var active = store;
+        if (active != null && sameRoot(active.root(), desiredRoot)) {
+            return active;
+        }
+        synchronized (ServerLodSyncManager.class) {
+            if (store == null || !sameRoot(store.root(), desiredRoot)) {
+                store = new ServerLodTileStore(desiredRoot);
+                Logger.info("Mounted Voxy server LoD store for player world: " + desiredRoot);
+            }
+            return store;
+        }
+    }
+
+    private static boolean sameRoot(Path left, Path right) {
+        return left.toAbsolutePath().normalize().equals(right.toAbsolutePath().normalize());
     }
 
     private static Path defaultStoreRoot() {
@@ -265,6 +304,14 @@ public final class ServerLodSyncManager {
             return server.getWorldPath(LevelResource.ROOT).resolve("voxy-server-lod");
         }
         return Path.of("voxy-server-lod");
+    }
+
+    private static Path storeRootFor(ServerPlayer player) {
+        var server = player.getServer();
+        if (server != null) {
+            return server.getWorldPath(LevelResource.ROOT).resolve("voxy-server-lod");
+        }
+        return defaultStoreRoot();
     }
 
     private static final class ServerLodSession {

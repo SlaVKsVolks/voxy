@@ -6,6 +6,7 @@ import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.util.IrisUtil;
+import me.cortex.voxy.client.sodium.VoxySodiumSectionLifecycleBridge;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -63,6 +64,7 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void voxy$captureSetWorld(ClientLevel world, CallbackInfo ci) {
         if (this.level != world) {
+            VoxySodiumSectionLifecycleBridge.clearForWorldChange("level change");
             this.voxy$shutdownRenderer();
             VoxyClient.resetVisualAttributionModeForRendererLifecycle("level change");
         }

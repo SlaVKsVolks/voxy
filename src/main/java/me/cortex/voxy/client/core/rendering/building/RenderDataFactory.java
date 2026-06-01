@@ -26,7 +26,7 @@ public class RenderDataFactory {
     private static final boolean CHECK_NEIGHBOR_FACE_OCCLUSION = true;
     private static final boolean DISABLE_CULL_SAME_OCCLUDES = false;//TODO: FIX TRANSLUCENTS (e.g. stained glass) breaking on chunk boarders with this set to false (it might be something else????)
     private static final boolean SURFACE_PREVIEW_TOP_FACES_ONLY = Boolean.parseBoolean(
-            System.getProperty("voxy.surfacePreviewTopFacesOnly", "false")
+            System.getProperty("voxy.surfacePreviewTopFacesOnly", "true")
     );
 
     private static final boolean VERIFY_MESHING = VoxyCommon.isVerificationFlagOn("verifyMeshing");

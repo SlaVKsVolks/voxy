@@ -240,7 +240,7 @@ public final class ClientServerLodSync {
             this.store = new ServerLodTileStore(root, false);
             this.store.manifest(ServerLodConstants.MAX_CLIENT_MANIFEST_HASHES).stream()
                     .filter(this.store::has)
-                    .map(metadata -> metadata.contentHash())
+                    .map(ServerLodConstants::tileCacheIdentity)
                     .forEach(this.cachedHashes::add);
             ServerLodDiagnostics.serverLodCacheIndexedTiles.set(this.store.indexedTileCount());
         }
@@ -256,7 +256,7 @@ public final class ClientServerLodSync {
         private boolean store(ServerLodTile tile) {
             boolean stored = this.store.store(tile.metadata(), tile.compressedPayload()) == ServerLodTileStore.StoreResult.STORED;
             if (stored) {
-                this.cachedHashes.add(tile.metadata().contentHash());
+                this.cachedHashes.add(ServerLodConstants.tileCacheIdentity(tile.metadata()));
                 this.manifestHashDirty = true;
                 ServerLodDiagnostics.serverLodCacheIndexedTiles.set(this.store.indexedTileCount());
             }
@@ -269,7 +269,7 @@ public final class ClientServerLodSync {
                 this.cachedHashes.clear();
                 this.store.manifest(ServerLodConstants.MAX_CLIENT_MANIFEST_HASHES).stream()
                         .filter(this.store::has)
-                        .map(metadata -> metadata.contentHash())
+                        .map(ServerLodConstants::tileCacheIdentity)
                         .forEach(this.cachedHashes::add);
                 this.manifestHashDirty = true;
                 ServerLodDiagnostics.serverLodCacheIndexedTiles.set(this.store.localIndexedTileCount());

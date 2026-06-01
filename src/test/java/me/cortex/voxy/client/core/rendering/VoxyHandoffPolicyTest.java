@@ -48,6 +48,10 @@ public final class VoxyHandoffPolicyTest {
         assertServerAuthoredNeoForgeContractIsExposed();
         assertServerLodCacheSynthesizesUsefulParentsByDefault();
         assertServerLodSyncAutoBuildsAndRefreshesManifests();
+        assertServerLodSyncAutoBuildsWhenCoverageRadiusIsTooSmall();
+        assertServerLodSyncUsesExactTileCacheIdentity();
+        assertServerLodSyncRemountsWorldStore();
+        assertProductionHardeningIssuesAreClosed();
         assertSodiumCompatibleProviderBoundaryExists();
         assertSodiumCompatibleProviderIsRuntimeAuthority();
         assertProviderIsProductionRenderAuthority();
@@ -439,6 +443,7 @@ public final class VoxyHandoffPolicyTest {
     private static void assertServerLodSyncAutoBuildsAndRefreshesManifests() {
         Path syncManager = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodSyncManager.java");
         Path builder = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerAuthoredLodBuilder.java");
+        Path store = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodTileStore.java");
         requireSourceContains(
                 syncManager,
                 "ServerAuthoredLodBuilder.ensureCoverage",
@@ -459,6 +464,148 @@ public final class VoxyHandoffPolicyTest {
                 builder,
                 "voxy.serverLodAutoBuildRadius",
                 "Automatic authored LoD generation must use a bounded radius instead of the full client request radius");
+        requireSourceContains(
+                store,
+                "public List<ServerLodTileMetadata> priorityManifest",
+                "Server LoD visible manifests must be generated from the priority manifest path");
+        requireSourceContains(
+                store,
+                "this.refreshIndex();\n        var out = new ArrayList<ServerLodTileMetadata>",
+                "Server LoD priority manifests must refresh persisted index files before deciding visible coverage");
+    }
+
+    private static void assertServerLodSyncAutoBuildsWhenCoverageRadiusIsTooSmall() {
+        Path syncManager = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodSyncManager.java");
+        Path builder = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerAuthoredLodBuilder.java");
+        Path store = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodTileStore.java");
+        requireSourceContains(
+                store,
+                "maxAdvertisedChunkReach",
+                "Server LoD stores must expose advertised chunk reach for radius coverage gating");
+        requireSourceContains(
+                builder,
+                "automaticCoverageRadius",
+                "Server LoD auto-build radius must be reusable by sync coverage checks");
+        requireSourceContains(
+                builder,
+                "shape=square",
+                "Automatic LoD coverage must match Minecraft's square render-distance ownership grid");
+        requireSourceContains(
+                syncManager,
+                "advertisedReach < requiredCoverageRadius",
+                "Server LoD sync must rebuild dense-but-too-small stores instead of relying on manifest count");
+        requireSourceContains(
+                syncManager,
+                "advertised_reach=",
+                "Server LoD auto-build diagnostics must report advertised reach and required radius");
+    }
+
+    private static void assertServerLodSyncUsesExactTileCacheIdentity() {
+        Path constants = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodConstants.java");
+        Path syncManager = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodSyncManager.java");
+        Path clientSync = Path.of("src/main/java/me/cortex/voxy/client/serverlod/ClientServerLodSync.java");
+        requireSourceContains(
+                constants,
+                "tileCacheIdentity(ServerLodTileMetadata metadata)",
+                "Server LoD cache identity must be a first-class exact tile identity, not only a payload hash");
+        requireSourceContains(
+                constants,
+                "metadata.key().stableId() + \"|\" + metadata.contentHash()",
+                "Server LoD cache identity must include both tile key and content hash");
+        requireSourceContains(
+                syncManager,
+                "!cached.contains(ServerLodConstants.tileCacheIdentity(metadata))",
+                "Server LoD manifest filtering must not suppress distinct tiles that share a content hash");
+        requireSourceContains(
+                clientSync,
+                ".map(ServerLodConstants::tileCacheIdentity)",
+                "Client LoD cache hello must advertise exact tile cache identities");
+        rejectSourceContains(
+                syncManager,
+                "!cached.contains(metadata.contentHash())",
+                "Server LoD manifest filtering must not use non-unique content hashes as tile ownership proof");
+    }
+
+    private static void assertServerLodSyncRemountsWorldStore() {
+        Path syncManager = Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerLodSyncManager.java");
+        requireSourceContains(
+                syncManager,
+                "getStoreFor(ServerPlayer player)",
+                "Server LoD sync must resolve the active store from the player world, not a stale early static path");
+        requireSourceContains(
+                syncManager,
+                "storeRootFor(ServerPlayer player)",
+                "Server LoD sync must compute the store root from the active server world");
+        requireSourceContains(
+                syncManager,
+                "Mounted Voxy server LoD store for player world",
+                "Server LoD sync must make world-store remounts visible in logs");
+        requireSourceContains(
+                syncManager,
+                "getStoreFor(player).priorityManifest",
+                "Server LoD visible manifests must use the player-world store");
+        requireSourceContains(
+                syncManager,
+                "var activeStore = getStoreFor(player);",
+                "Server LoD tile requests must read from the same player-world store used for manifests");
+    }
+
+    private static void assertProductionHardeningIssuesAreClosed() {
+        Path renderDataFactory = Path.of("src/main/java/me/cortex/voxy/client/core/rendering/building/RenderDataFactory.java");
+        requireSourceContains(
+                renderDataFactory,
+                "System.getProperty(\"voxy.surfacePreviewTopFacesOnly\", \"true\")",
+                "Surface preview top-face-only mode must be default-on to prevent volumetric shell artifacts");
+
+        Path mapper = Path.of("src/main/java/me/cortex/voxy/common/world/other/Mapper.java");
+        requireSourceContains(
+                mapper,
+                "fallbackImportedBlockState",
+                "Mapper must centralize imported missing/corrupt block-state fallback policy");
+        requireSourceContains(
+                mapper,
+                "Blocks.STONE.defaultBlockState()",
+                "Imported missing/corrupt nonzero block-state mappings must fallback to solid stone, not air holes");
+
+        Path depthFramebuffer = Path.of("src/main/java/me/cortex/voxy/client/core/rendering/util/DepthFramebuffer.java");
+        requireSourceContains(
+                depthFramebuffer,
+                "glCheckNamedFramebufferStatus",
+                "Depth framebuffer resize must verify driver framebuffer completeness");
+        requireSourceContains(
+                depthFramebuffer,
+                "GL_FRAMEBUFFER_COMPLETE",
+                "Depth framebuffer resize must fail closed when depth attachment creation is incomplete");
+
+        Path materialResolver = Path.of("src/main/java/me/cortex/voxy/client/sodium/provider/VoxyTerrainMaterialResolver.java");
+        requireSourceContains(
+                materialResolver,
+                "ThreadLocal<Map<CacheKey, VoxyResolvedTerrainMaterial>>",
+                "Material resolver must cache per-thread material lookups for parallel meshing");
+        requireSourceContains(
+                materialResolver,
+                "record CacheKey",
+                "Material resolver cache must key block, biome, light, and pass together");
+
+        Path lifecycleBridge = Path.of("src/main/java/me/cortex/voxy/client/sodium/VoxySodiumSectionLifecycleBridge.java");
+        requireSourceContains(
+                lifecycleBridge,
+                "clearForWorldChange",
+                "Sodium lifecycle bridge must expose an explicit world-change clear hook");
+        requireSourceContains(
+                lifecycleBridge,
+                "provider.resetRuntimeState(provider.snapshot())",
+                "Sodium lifecycle bridge world-change clear must reset provider-owned state");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinLevelRenderer.java"),
+                "VoxySodiumSectionLifecycleBridge.clearForWorldChange(\"level change\")",
+                "Level changes must invoke the Sodium lifecycle bridge clear hook before renderer shutdown");
+
+        Path serviceManager = Path.of("src/main/java/me/cortex/voxy/common/thread/ServiceManager.java");
+        requireSourceContains(
+                serviceManager,
+                "public synchronized void shutdown()",
+                "ServiceManager shutdown must be synchronized so concurrent shutdown cannot race");
     }
 
     private static void assertSodiumCompatibleProviderBoundaryExists() {
@@ -631,18 +778,15 @@ public final class VoxyHandoffPolicyTest {
                 false
         ));
         cutoutProvider.recordCommittedMesh(43L, exactCell, 8, 2L, VoxyProviderRenderCell.PASS_CUTOUT);
-        if (!cutoutProvider.shouldRenderDuringSodiumPass(VoxyTerrainPass.CUTOUT)) {
-            throw new AssertionError("Pure CUTOUT provider geometry must be advertised as Sodium-compatible after independent CUTOUT dispatch is proven");
+        if (cutoutProvider.shouldRenderDuringSodiumPass(VoxyTerrainPass.CUTOUT)) {
+            throw new AssertionError("CUTOUT provider geometry must stay disabled until independent CUTOUT dispatch is proven");
         }
         if (cutoutProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
             throw new AssertionError("CUTOUT provider geometry must not enter the SOLID production render list");
         }
         VoxyProviderDrawDecision cutoutDecision = cutoutProvider.drawDecision(VoxyTerrainPass.CUTOUT);
-        if (!cutoutDecision.draw()) {
-            throw new AssertionError("Pure CUTOUT provider geometry must draw through the independent CUTOUT render list");
-        }
-        if (cutoutDecision.meshIds().length != 1 || cutoutDecision.meshIds()[0] != 8) {
-            throw new AssertionError("CUTOUT provider draw decision must expose only CUTOUT-owned mesh ids");
+        if (cutoutDecision.draw()) {
+            throw new AssertionError("CUTOUT provider geometry must not draw before the independent CUTOUT render list is supported");
         }
 
         VoxyFarTerrainProvider mixedProvider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
@@ -664,11 +808,11 @@ public final class VoxyHandoffPolicyTest {
         );
         VoxyProviderDrawDecision mixedSolidDecision = mixedProvider.drawDecision(VoxyTerrainPass.SOLID);
         VoxyProviderDrawDecision mixedCutoutDecision = mixedProvider.drawDecision(VoxyTerrainPass.CUTOUT);
-        if (!mixedSolidDecision.draw() || mixedSolidDecision.meshIds().length != 1 || mixedSolidDecision.meshIds()[0] != 9) {
-            throw new AssertionError("Mixed SOLID/CUTOUT provider geometry must be present in the SOLID render list");
+        if (mixedSolidDecision.draw()) {
+            throw new AssertionError("Mixed SOLID/CUTOUT provider geometry must not draw as opaque fallback");
         }
-        if (!mixedCutoutDecision.draw() || mixedCutoutDecision.meshIds().length != 1 || mixedCutoutDecision.meshIds()[0] != 9) {
-            throw new AssertionError("Mixed SOLID/CUTOUT provider geometry must be present in the CUTOUT render list");
+        if (mixedCutoutDecision.draw()) {
+            throw new AssertionError("Mixed SOLID/CUTOUT provider geometry must not draw until mesh pass splitting is proven");
         }
 
         VoxyFarTerrainProvider parentThenChildProvider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(

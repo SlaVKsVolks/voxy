@@ -51,6 +51,9 @@ public class ServiceManager {
         return this.createService(ctxFactory, weight, name, null);
     }
     public synchronized Service createService(Supplier<Pair<Runnable, Runnable>> ctxFactory, long weight, String name, BooleanSupplier limiter) {
+        if (this.isShutdown) {
+            throw new IllegalStateException("Service manager already shutdown");
+        }
         Service newService = new Service(ctxFactory, this, weight, name, limiter);
         var newServices = Arrays.copyOf(this.services, this.services.length+1);
         newServices[newServices.length-1] = newService;
@@ -132,23 +135,21 @@ public class ServiceManager {
         return 0;
     }
 
-    public void shutdown() {
+    public synchronized void shutdown() {
         if (this.isShutdown) {
             throw new IllegalStateException("Service manager already shutdown");
         }
         this.isShutdown = true;
         while (this.services.length != 0) {
-            Thread.yield();
-            synchronized (this) {
-                for (var s : this.services) {
-                    if (s.isLive()) {
-                        throw new IllegalStateException("Service '" + s.name + "' was not in shutdown when manager shutdown");
-                    }
+            for (var s : this.services) {
+                if (s.isLive()) {
+                    throw new IllegalStateException("Service '" + s.name + "' was not in shutdown when manager shutdown");
                 }
             }
+            this.waitForShutdownProgress();
         }
         while (this.totalJobs.get()!=0) {
-            Thread.yield();
+            this.waitForShutdownProgress();
         }
     }
 
@@ -166,6 +167,7 @@ public class ServiceManager {
         }
 
         this.services = newServices;
+        this.notifyAll();
     }
 
     void execute(Service service) {
@@ -179,6 +181,18 @@ public class ServiceManager {
 
         if (this.totalJobs.addAndGet(-remaining)<0) {
             throw new IllegalStateException("total jobs <0");
+        }
+        synchronized (this) {
+            this.notifyAll();
+        }
+    }
+
+    private void waitForShutdownProgress() {
+        try {
+            this.wait(1L);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while shutting down service manager", exception);
         }
     }
 

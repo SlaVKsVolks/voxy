@@ -48,6 +48,13 @@ public final class ServerAuthoredLodBuilder {
 
     private ServerAuthoredLodBuilder() {}
 
+    public static int automaticCoverageRadius(int requestedRadiusChunks) {
+        if (!AUTO_BUILD_ENABLED) {
+            return 0;
+        }
+        return Math.min(Math.max(0, requestedRadiusChunks), AUTO_BUILD_RADIUS);
+    }
+
     public static boolean ensureCoverage(ServerPlayer player, int requestedRadiusChunks, String reason) {
         if (!AUTO_BUILD_ENABLED || player == null) {
             return false;
@@ -55,7 +62,7 @@ public final class ServerAuthoredLodBuilder {
         if (activeJob != null) {
             return false;
         }
-        int radiusChunks = Math.min(Math.max(0, requestedRadiusChunks), AUTO_BUILD_RADIUS);
+        int radiusChunks = automaticCoverageRadius(requestedRadiusChunks);
         if (radiusChunks <= 0) {
             return false;
         }
@@ -63,7 +70,7 @@ public final class ServerAuthoredLodBuilder {
         String options = "status=light"
                 + " chunksPerTick=" + AUTO_BUILD_CHUNKS_PER_TICK
                 + " publishStore=true"
-                + " shape=circle";
+                + " shape=square";
         int centerX = player.getBlockX() >> 4;
         int centerZ = player.getBlockZ() >> 4;
         int code = start(source, centerX, centerZ, radiusChunks, options);

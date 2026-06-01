@@ -49,6 +49,28 @@ public final class VoxySodiumSectionLifecycleBridge implements RenderSectionLife
         Logger.info("Registered Voxy Sodium section lifecycle bridge");
     }
 
+    public static void clearForWorldChange(String reason) {
+        var level = Minecraft.getInstance().level;
+        if (level == null) {
+            return;
+        }
+        var system = getRenderSystem(level);
+        if (system == null) {
+            return;
+        }
+        var provider = system.getFarTerrainProvider();
+        if (provider != null) {
+            provider.resetRuntimeState(provider.snapshot());
+        }
+        system.chunkBoundRenderer.reset();
+        RenderCorrectnessDiagnostics.call(
+                "sodium_lifecycle",
+                "clearForWorldChange",
+                "reset",
+                reason == null ? "unknown" : reason
+        );
+    }
+
     @Override
     public void onSectionInfoUpdated(SectionPos position, RenderSection section, @Nullable BuiltSectionInfo info, boolean changed) {
         if (!VoxyConfig.CONFIG.ingestEnabled || BOBBY_INSTALLED) {

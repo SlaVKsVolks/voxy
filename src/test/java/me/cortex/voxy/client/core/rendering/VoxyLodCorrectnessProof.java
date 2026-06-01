@@ -3,6 +3,7 @@ package me.cortex.voxy.client.core.rendering;
 import me.cortex.voxy.client.sodium.provider.VoxyFarTerrainProviderSnapshot;
 import me.cortex.voxy.client.sodium.provider.VoxyFarTerrainProvider;
 import me.cortex.voxy.client.sodium.provider.VoxyProviderDrawDecision;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderCell;
 import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderList;
 import me.cortex.voxy.client.sodium.provider.VoxyResolvedTerrainMaterial;
 import me.cortex.voxy.client.sodium.provider.VoxyRuntimeMeshValidator;
@@ -542,6 +543,7 @@ public final class VoxyLodCorrectnessProof {
         listProvider.recordCommittedMesh(100L, exactRenderCell, 11, 1L);
         listProvider.recordCommittedMesh(101L, fallbackRenderCell, 12, 2L);
         listProvider.recordCommittedMesh(102L, rejectedRenderCell, 13, 3L);
+        listProvider.recordCommittedMesh(103L, exactRenderCell, 14, 4L, VoxyProviderRenderCell.PASS_CUTOUT);
         VoxyProviderDrawDecision listDecision = listProvider.drawDecision(VoxyTerrainPass.SOLID);
         VoxyProviderRenderList renderList = listDecision.renderList();
         if (!listDecision.draw()) {
@@ -550,6 +552,13 @@ public final class VoxyLodCorrectnessProof {
         if (!Arrays.equals(renderList.meshIds(), new int[] {11, 12})) {
             failures.add("mesh: provider render list contained non-approved mesh ids "
                     + Arrays.toString(renderList.meshIds()));
+        }
+        VoxyProviderDrawDecision cutoutDecision = listProvider.drawDecision(VoxyTerrainPass.CUTOUT);
+        if (cutoutDecision.draw()) {
+            failures.add("mesh: provider CUTOUT list drew before independent cutout dispatch was proven");
+        }
+        if (listProvider.providerDrawnCutoutSections() != 0) {
+            failures.add("mesh: provider reported CUTOUT draw ownership before independent cutout dispatch was proven");
         }
         long initialListEpoch = renderList.epoch();
         listProvider.recordStaleUploadRejection(100L);

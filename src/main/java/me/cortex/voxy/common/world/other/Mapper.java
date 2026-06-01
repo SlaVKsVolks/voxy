@@ -180,7 +180,7 @@ public class Mapper {
                 }
                 lastFilledBlockMappingId[0] = missingId;
                 filledBlockMappingIds[0]++;
-                this.blockId2stateEntry.add(new StateEntry(missingId, Blocks.AIR.defaultBlockState()));
+                this.blockId2stateEntry.add(new StateEntry(missingId, fallbackImportedBlockState(missingId)));
             }
             if (this.blockId2stateEntry.size() == entry.id) {
                 this.blockId2stateEntry.add(entry);
@@ -311,7 +311,7 @@ public class Mapper {
         int firstMissing = this.blockId2stateEntry.size();
         while (this.blockId2stateEntry.size() < targetId) {
             int missingId = this.blockId2stateEntry.size();
-            this.blockId2stateEntry.add(new StateEntry(missingId, Blocks.AIR.defaultBlockState()));
+            this.blockId2stateEntry.add(new StateEntry(missingId, fallbackImportedBlockState(missingId)));
         }
         if (this.blockId2stateEntry.size() != firstMissing) {
             Logger.warn("Filled imported Voxy server LoD block mapping gap "
@@ -331,6 +331,10 @@ public class Mapper {
                     + firstMissing + ".." + (this.biomeId2biomeEntry.size() - 1)
                     + " before imported id " + targetId);
         }
+    }
+
+    private static BlockState fallbackImportedBlockState(int id) {
+        return id == AIR ? Blocks.AIR.defaultBlockState() : Blocks.STONE.defaultBlockState();
     }
 
     public void ensureImportedMappingCoverage(int maxBlockId, int maxBiomeId) {
@@ -597,8 +601,8 @@ public class Mapper {
                     bsc = (CompoundTag) DataFixers.getDataFixer().update(References.BLOCK_STATE, new Dynamic<>(NbtOps.INSTANCE,bsc),0, SharedConstants.getCurrentVersion().getDataVersion().getVersion()).getValue();
                     state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
                     if (state.isError()) {
-                        Logger.error("Could not decode blockstate setting to air. id:" + id + " error: " + state.error().get().message());
-                        return new StateEntry(id, Blocks.AIR.defaultBlockState());
+                        Logger.error("Could not decode blockstate setting to fallback. id:" + id + " error: " + state.error().get().message());
+                        return new StateEntry(id, fallbackImportedBlockState(id));
                     } else {
                         Logger.info("Fixed blockstate to: " + state.getOrThrow());
                         forceResave[0] |= true;

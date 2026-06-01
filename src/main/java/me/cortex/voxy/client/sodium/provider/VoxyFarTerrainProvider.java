@@ -321,7 +321,7 @@ public final class VoxyFarTerrainProvider {
         if (meshId < 0) {
             return VoxyProviderMeshApproval.rejected(VoxyTerrainFailureReason.SECTION_OUT_OF_BOUNDS, cell.ownership());
         }
-        if (passMask == 0) {
+        if (passMask == 0 || Integer.bitCount(passMask) != 1) {
             return VoxyProviderMeshApproval.rejected(VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED, cell.ownership());
         }
         return VoxyProviderMeshApproval.approved(
@@ -674,7 +674,7 @@ public final class VoxyFarTerrainProvider {
     }
 
     private boolean supportsIndependentDrawPass(VoxyTerrainPass pass) {
-        return pass == VoxyTerrainPass.SOLID || pass == VoxyTerrainPass.CUTOUT;
+        return pass == VoxyTerrainPass.SOLID;
     }
 
     private void applyRenderIndexRecordResult(long incomingSectionKey, VoxyProviderRenderIndex.RecordResult recordResult) {

@@ -153,6 +153,7 @@ public final class ServerLodTileStore {
     }
 
     public List<ServerLodTileMetadata> priorityManifest(String dimension, int playerBlockX, int playerBlockZ, int limit) {
+        this.refreshIndex();
         var out = new ArrayList<ServerLodTileMetadata>(Math.min(Math.max(0, limit), this.index.size() + 4096));
         this.index.values().stream()
                 .filter(ServerLodTileStore::canAdvertise)
@@ -170,6 +171,28 @@ public final class ServerLodTileStore {
             appendCompactManifest(out, limit - out.size(), dimension, playerBlockX, playerBlockZ);
         }
         return out;
+    }
+
+    public int maxAdvertisedChunkReach(String dimension, int playerBlockX, int playerBlockZ) {
+        this.refreshIndex();
+        int playerChunkX = Math.floorDiv(playerBlockX, 16);
+        int playerChunkZ = Math.floorDiv(playerBlockZ, 16);
+        int maxReach = 0;
+        for (ServerLodTileMetadata metadata : this.index.values()) {
+            if (!canAdvertise(metadata) || !metadata.key().dimension().equals(dimension)) {
+                continue;
+            }
+            int sectionSizeChunks = 2 << metadata.key().lodLevel();
+            int minChunkX = metadata.key().sectionX() * sectionSizeChunks;
+            int maxChunkX = minChunkX + sectionSizeChunks - 1;
+            int minChunkZ = metadata.key().sectionZ() * sectionSizeChunks;
+            int maxChunkZ = minChunkZ + sectionSizeChunks - 1;
+            int reach = Math.max(
+                    Math.max(Math.abs(minChunkX - playerChunkX), Math.abs(maxChunkX - playerChunkX)),
+                    Math.max(Math.abs(minChunkZ - playerChunkZ), Math.abs(maxChunkZ - playerChunkZ)));
+            maxReach = Math.max(maxReach, reach);
+        }
+        return maxReach;
     }
 
     public Optional<ServerLodTile> read(ServerLodTileKey key) {

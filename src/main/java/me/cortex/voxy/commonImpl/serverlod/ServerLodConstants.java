@@ -15,6 +15,10 @@ public final class ServerLodConstants {
 
     private ServerLodConstants() {}
 
+    public static String tileCacheIdentity(ServerLodTileMetadata metadata) {
+        return sha256Hex(metadata.key().stableId() + "|" + metadata.contentHash());
+    }
+
     public static String sha256Hex(byte[] data) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));

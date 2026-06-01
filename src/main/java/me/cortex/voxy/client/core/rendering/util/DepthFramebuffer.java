@@ -11,6 +11,7 @@ import static org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER;
 import static org.lwjgl.opengl.GL11C.GL_DEPTH;
 import static org.lwjgl.opengl.GL14.GL_DEPTH_COMPONENT24;
 import static org.lwjgl.opengl.GL30C.*;
+import static org.lwjgl.opengl.GL45C.glCheckNamedFramebufferStatus;
 
 public class DepthFramebuffer {
     private final int depthType;
@@ -34,6 +35,10 @@ public class DepthFramebuffer {
             //glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             //glTextureParameteri(this.depthBuffer.id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             this.framebuffer.bind(this.getDepthAttachmentType(), this.depthBuffer);
+            int status = glCheckNamedFramebufferStatus(this.framebuffer.id, GL_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                throw new IllegalStateException("Depth framebuffer incomplete after resize: " + status);
+            }
             return true;
         }
         return false;
