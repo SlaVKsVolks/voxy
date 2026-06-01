@@ -1,14 +1,13 @@
 package me.cortex.voxy.client.core.rendering.building;
 
-import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderCell;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderTerrainPassClassifier;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import me.cortex.voxy.commonImpl.VoxyCommon;
 
 import java.util.Arrays;
 
 //TODO: also have an AABB size stored
 public final class BuiltSection {
-    public static final boolean VERIFY_BUILT_SECTION_OFFSETS = VoxyCommon.isVerificationFlagOn("verifyBuiltSectionOffsets");
+    public static final boolean VERIFY_BUILT_SECTION_OFFSETS = Boolean.getBoolean("voxy.verifyBuiltSectionOffsets");
     public static final long NO_REQUEST_EPOCH = 0L;
     public final long position;
     public final long requestEpoch;
@@ -82,19 +81,11 @@ public final class BuiltSection {
         if (this.isEmpty() || this.offsets == null || this.offsets.length < 8) {
             return 0;
         }
-        if (this.providerQuadCount(0) > 0) {
-            return 0;
-        }
-        boolean hasCutout = this.providerQuadCount(1) > 0;
-        boolean hasSolid = this.providerSolidQuadCount() > 0;
-        int passMask = 0;
-        if (hasCutout) {
-            passMask |= VoxyProviderRenderCell.PASS_CUTOUT;
-        }
-        if (hasSolid) {
-            passMask |= VoxyProviderRenderCell.PASS_SOLID;
-        }
-        return passMask;
+        return VoxyProviderTerrainPassClassifier.passMaskForCounts(
+                this.providerQuadCount(0),
+                this.providerQuadCount(1),
+                this.providerSolidQuadCount()
+        );
     }
 
     private int providerSolidQuadCount() {

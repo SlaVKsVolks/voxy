@@ -10,6 +10,7 @@ import me.cortex.voxy.client.sodium.provider.VoxyTerrainFailureReason;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnership;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnershipCell;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainPass;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderTerrainPassClassifier;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.serverlod.ServerLodNeoForgeContract;
 
@@ -60,6 +61,7 @@ public final class VoxyHandoffPolicyTest {
         assertProviderCurrentRefreshDoesNotRetainStaleGaps();
         assertProviderCurrentRefreshDoesNotInventSolidPassOwnership();
         assertProviderCurrentRefreshAcceptsKnownSolidPassOwnership();
+        assertProviderPassMaskKeepsSolidBuffersWhenUnsupportedBuffersExist();
         assertProviderRejectedMeshCommitIsDiagnosticFailure();
         assertProviderCurrentRefreshPrunesStaleRenderListEntries();
         assertProviderCurrentRefreshPreservesRejectedBoundaryFailure();
@@ -1068,6 +1070,10 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/resources/assets/voxy/shaders/lod/gl46/cmdgen.comp"),
                 "providerDrawCutoutBuffers",
                 "Provider command generation must be able to suppress CUTOUT buffers during SOLID passes");
+        requireSourceContains(
+                Path.of("src/main/resources/assets/voxy/shaders/lod/gl46/cmdgen.comp"),
+                "if (!providerListMode && count != 0)",
+                "Provider command generation must not emit translucent commands from provider SOLID render lists");
     }
 
     private static void assertProviderCurrentRefreshDoesNotRetainStaleGaps() {
@@ -1186,6 +1192,23 @@ public final class VoxyHandoffPolicyTest {
         }
         if (provider.diagnostics().boundaryRejectedSections() != 0) {
             throw new AssertionError("Known SOLID current-refresh geometry must not be counted as rejected boundary coverage");
+        }
+    }
+
+    private static void assertProviderPassMaskKeepsSolidBuffersWhenUnsupportedBuffersExist() {
+        int mixedMask = VoxyProviderTerrainPassClassifier.passMaskForCounts(1, 1, 1);
+        if (mixedMask != VoxyProviderRenderCell.PASS_SOLID) {
+            throw new AssertionError("Provider pass mask must keep SOLID ownership when unsupported translucent/cutout buffers also exist");
+        }
+
+        int translucentOnlyMask = VoxyProviderTerrainPassClassifier.passMaskForCounts(1, 0, 0);
+        if (translucentOnlyMask != 0) {
+            throw new AssertionError("Provider pass mask must not draw translucent-only geometry as solid");
+        }
+
+        int cutoutOnlyMask = VoxyProviderTerrainPassClassifier.passMaskForCounts(0, 1, 0);
+        if (cutoutOnlyMask != VoxyProviderRenderCell.PASS_CUTOUT) {
+            throw new AssertionError("Provider pass mask must preserve cutout-only ownership for future CUTOUT support");
         }
     }
 

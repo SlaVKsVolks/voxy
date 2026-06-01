@@ -123,7 +123,7 @@ void main() {
         uint count = 0;
         //Translucency
         count = counts.x&0xFFFFu;
-        if (count != 0) {
+        if (!providerListMode && count != 0) {
             uint tp = atomicAdd(translucentDrawCount, 1)+TRANSLUCENT_WRITE_BASE;
             translucentCommandData[tp] = drawId;
             uvec3 absRel = abs(relative);
