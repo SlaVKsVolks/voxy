@@ -62,6 +62,9 @@ public final class VoxyHandoffPolicyTest {
         assertProviderRejectedMeshCommitIsDiagnosticFailure();
         assertProviderCurrentRefreshPrunesStaleRenderListEntries();
         assertProviderCurrentRefreshPreservesRejectedBoundaryFailure();
+        assertProviderCurrentRefreshIgnoresMissingTraversalPlaceholders();
+        assertProviderCurrentRefreshDoesNotChurnRenderListEpoch();
+        assertProviderRejectsCommittedMeshAfterInvalidation();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -1221,6 +1224,114 @@ public final class VoxyHandoffPolicyTest {
         }
         if (!VoxyFarTerrainProvider.FAIL_UNTRUSTED_SOURCE.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Current rejected boundary ownership must fail provider authority");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshIgnoresMissingTraversalPlaceholders() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long coveredSection = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        long placeholderSection = WorldEngine.getWorldSectionId(0, 7, 0, 0);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        VoxyTerrainOwnershipCell missingPlaceholder = new VoxyTerrainOwnershipCell(
+                7,
+                0,
+                0,
+                VoxyTerrainOwnership.REJECTED_INVALID,
+                VoxyTerrainFailureReason.MISSING_EXACT_CHILD
+        );
+        provider.recordCommittedMesh(coveredSection, exactCell, 701, 1L);
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(coveredSection, exactCell, 701, 1L);
+        provider.recordCurrentOwnershipDecision(placeholderSection, missingPlaceholder);
+        provider.finishCurrentOwnershipRefresh();
+
+        if (provider.diagnostics().boundaryMissingRequiredCells() != 0) {
+            throw new AssertionError("Current refresh must not turn missing traversal placeholders into hard gaps");
+        }
+        if (!provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Current missing placeholders must not disable valid provider-owned SOLID coverage");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshDoesNotChurnRenderListEpoch() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long section = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(section, exactCell, 701, 1L);
+        long initialEpoch = provider.drawDecision(VoxyTerrainPass.SOLID).renderList().epoch();
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(section, exactCell, 701, 1L);
+        provider.finishCurrentOwnershipRefresh();
+
+        long refreshedEpoch = provider.drawDecision(VoxyTerrainPass.SOLID).renderList().epoch();
+        if (refreshedEpoch != initialEpoch) {
+            throw new AssertionError("No-op current refresh must not churn provider render-list epoch");
+        }
+    }
+
+    private static void assertProviderRejectsCommittedMeshAfterInvalidation() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long section = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+
+        provider.invalidateSection(section);
+        provider.recordCommittedMesh(section, exactCell, 801, 0L);
+
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Committed mesh with stale request epoch after invalidation must not draw");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Committed mesh with stale request epoch after invalidation must fail stale-upload authority");
+        }
+        if (provider.staleUploadRejections() == 0) {
+            throw new AssertionError("Committed mesh with stale request epoch after invalidation must increment stale rejection diagnostics");
         }
     }
 

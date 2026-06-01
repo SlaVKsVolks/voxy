@@ -327,6 +327,10 @@ public final class VoxyFarTerrainProvider {
         if (passMask == 0 || Integer.bitCount(passMask) != 1) {
             return VoxyProviderMeshApproval.rejected(VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED, cell.ownership());
         }
+        long invalidationVersion = this.invalidationTracker.version(sectionKey);
+        if (invalidationVersion > 0 && requestEpoch < invalidationVersion) {
+            return VoxyProviderMeshApproval.rejected(VoxyTerrainFailureReason.STALE_UPLOAD, cell.ownership());
+        }
         return VoxyProviderMeshApproval.approved(
                 cell.ownership(),
                 passMask
@@ -370,12 +374,11 @@ public final class VoxyFarTerrainProvider {
         switch (cell.ownership()) {
             case VOXY_EXACT_LOD -> this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.EXACT);
             case VOXY_PARENT_FALLBACK -> this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.FALLBACK);
-            case REJECTED_INVALID -> this.recordBoundaryCoverageNoRefresh(
-                    sectionKey,
-                    cell.reason() == VoxyTerrainFailureReason.MISSING_EXACT_CHILD
-                            ? BoundaryCoverageState.MISSING
-                            : BoundaryCoverageState.REJECTED
-            );
+            case REJECTED_INVALID -> {
+                if (cell.reason() != VoxyTerrainFailureReason.MISSING_EXACT_CHILD) {
+                    this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.REJECTED);
+                }
+            }
             case VANILLA_EXACT, EMPTY_OUTSIDE_DISTANCE -> {
             }
         }
@@ -612,6 +615,9 @@ public final class VoxyFarTerrainProvider {
         if (this.invalidRenderedSections.get() > 0) {
             return FAIL_INVALID_RENDERED;
         }
+        if (this.staleUploadRejections.get() > 0 && this.productionSupportedRenderOwnedSections() == 0) {
+            return FAIL_STALE_UPLOAD_RENDERED;
+        }
         if (this.parentChildConflictCells.get() > 0) {
             return FAIL_OWNERSHIP_CONFLICT;
         }
@@ -701,6 +707,10 @@ public final class VoxyFarTerrainProvider {
         }
         if (reason == VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED) {
             this.unsupportedPassSkips.incrementAndGet();
+        }
+        if (reason == VoxyTerrainFailureReason.STALE_UPLOAD) {
+            this.staleUploadRejections.incrementAndGet();
+            return;
         }
         this.invalidRejectedCells.incrementAndGet();
         if (approval.ownership() == VoxyTerrainOwnership.REJECTED_INVALID) {

@@ -59,6 +59,10 @@ public final class VoxyProviderRenderIndex {
 
     public RecordResult record(VoxyProviderRenderCell cell) {
         if (cell.renderOwned()) {
+            VoxyProviderRenderCell existing = this.cells.get(cell.sectionKey());
+            if (cell.equals(existing)) {
+                return new RecordResult(true, false, new long[0]);
+            }
             if (this.hasRenderOwnedDescendant(cell.sectionKey())) {
                 this.cells.remove(cell.sectionKey());
                 this.epoch.incrementAndGet();

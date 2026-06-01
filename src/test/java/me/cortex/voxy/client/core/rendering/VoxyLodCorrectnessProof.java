@@ -592,6 +592,26 @@ public final class VoxyLodCorrectnessProof {
         if (!Arrays.equals(staleListProvider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {31})) {
             failures.add("mesh: current provider refresh did not prune stale render-list entries");
         }
+        long stableEpoch = staleListProvider.drawDecision(VoxyTerrainPass.SOLID).renderList().epoch();
+        staleListProvider.beginCurrentOwnershipRefresh();
+        staleListProvider.recordCurrentRenderCell(currentListSection, exactRenderCell, 31, 1L);
+        staleListProvider.finishCurrentOwnershipRefresh();
+        if (staleListProvider.drawDecision(VoxyTerrainPass.SOLID).renderList().epoch() != stableEpoch) {
+            failures.add("mesh: no-op current provider refresh churned render-list epoch");
+        }
+
+        VoxyFarTerrainProvider staleCommitProvider = new VoxyFarTerrainProvider(snapshot);
+        long staleCommitSection = WorldEngine.getWorldSectionId(0, 13, 0, 0);
+        staleCommitProvider.invalidateSection(staleCommitSection);
+        staleCommitProvider.recordCommittedMesh(staleCommitSection, exactRenderCell, 33, 0L);
+        if (staleCommitProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale committed mesh entered the provider render list");
+        }
+        if (staleCommitProvider.staleUploadRejections() == 0) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale committed mesh was not diagnosed");
+        }
 
         VoxyFarTerrainProvider mixedRejectedProvider = new VoxyFarTerrainProvider(snapshot);
         mixedRejectedProvider.recordCommittedMesh(
