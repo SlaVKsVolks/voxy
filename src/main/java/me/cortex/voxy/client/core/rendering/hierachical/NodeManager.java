@@ -14,6 +14,7 @@ import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryManager;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.ExpandingObjectAllocationList;
 import me.cortex.voxy.client.sodium.provider.VoxyFarTerrainProvider;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderCell;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnership;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnershipCell;
 import me.cortex.voxy.client.sodium.provider.VoxyTerrainOwnershipMap;
@@ -758,7 +759,7 @@ public class NodeManager {
                 this.geometryManager.removeSection(meshId);
             }
             if (this.farTerrainProvider != null) {
-                this.farTerrainProvider.recordParentSuppressed(pos);
+                this.farTerrainProvider.recordRenderCellRemoved(pos);
             }
             section.free();
             return EMPTY_GEOMETRY_ID;
@@ -798,6 +799,7 @@ public class NodeManager {
         }
         if (DROP_LEAF_PARENT_MESH_ON_REFINEMENT
                 && childExistence != 0
+                && this.hasProviderRenderableChildCoverage(pos, childExistence)
                 && VoxyHandoffPolicy.isBoundaryRingSection(level, WorldEngine.getX(pos), WorldEngine.getY(pos), WorldEngine.getZ(pos))) {
             return this.suppressParentMesh(pos, meshId, reason + "_boundary_refinable_parent_mesh");
         }
@@ -854,6 +856,9 @@ public class NodeManager {
         if (!DROP_LEAF_PARENT_MESH_ON_REFINEMENT || WorldEngine.getLevel(pos) == 0 || childExistence == 0) {
             return;
         }
+        if (!this.hasProviderRenderableChildCoverage(pos, childExistence)) {
+            return;
+        }
         int geometry = this.nodeData.getNodeGeometry(nodeId);
         if (geometry == NULL_GEOMETRY_ID || geometry == EMPTY_GEOMETRY_ID) {
             return;
@@ -879,6 +884,52 @@ public class NodeManager {
         int mesh = request.getChildMesh(childIdx);
         return request.getChildChildExistence(childIdx) != 0
                 || (mesh != NULL_GEOMETRY_ID && mesh != EMPTY_GEOMETRY_ID);
+    }
+
+    private boolean requestHasProviderRenderableChildMesh(NodeChildRequest request, int childMask) {
+        for (int childIdx = 0; childIdx < 8; childIdx++) {
+            if ((childMask & (1 << childIdx)) == 0) {
+                continue;
+            }
+            if (this.isProviderRenderableGeometry(
+                    request.getChildMesh(childIdx),
+                    request.getChildProviderTerrainPassMask(childIdx))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasProviderRenderableChildCoverage(long parentPos, byte childExistence) {
+        int childMask = Byte.toUnsignedInt(childExistence);
+        if (childMask == 0) {
+            return false;
+        }
+        for (int childIdx = 0; childIdx < 8; childIdx++) {
+            if ((childMask & (1 << childIdx)) == 0) {
+                continue;
+            }
+            int encodedChild = this.activeSectionMap.get(makeChildPos(parentPos, childIdx));
+            if ((encodedChild & NODE_TYPE_MSK) == NODE_TYPE_REQUEST) {
+                continue;
+            }
+            int childNodeId = encodedChild & NODE_ID_MSK;
+            if (!this.nodeData.nodeExists(childNodeId)) {
+                continue;
+            }
+            if (this.isProviderRenderableGeometry(
+                    this.nodeData.getNodeGeometry(childNodeId),
+                    this.nodeData.getNodeProviderTerrainPassMask(childNodeId))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isProviderRenderableGeometry(int meshId, int providerTerrainPassMask) {
+        return this.isRenderableGeometryId(meshId)
+                && (providerTerrainPassMask & VoxyProviderRenderCell.PASS_SOLID) != 0
+                && Integer.bitCount(providerTerrainPassMask) == 1;
     }
 
     private void discardEmptyRequestChild(NodeChildRequest request, int childIdx, String reason) {
@@ -920,7 +971,7 @@ public class NodeManager {
             } else {
                 this.geometryManager.removeSection(previousGeometry);
                 if (this.farTerrainProvider != null) {
-                    this.farTerrainProvider.recordParentSuppressed(this.nodeData.nodePosition(node));
+                    this.farTerrainProvider.recordRenderCellRemoved(this.nodeData.nodePosition(node));
                 }
             }
         } else {
@@ -1708,8 +1759,10 @@ public class NodeManager {
                 this.clearAllocId(childNodeId);
             }
             //Free request
+            boolean requestHasRenderableChildMesh = this.requestHasProviderRenderableChildMesh(request, validMsk);
             this.childRequests.release(requestId);
-            if (this.isRenderableGeometryId(this.nodeData.getNodeGeometry(parentNodeId))) {
+            if (this.isRenderableGeometryId(this.nodeData.getNodeGeometry(parentNodeId))
+                    && requestHasRenderableChildMesh) {
                 this.setNodeGeometryWithProviderPassMask(parentNodeId, this.suppressParentMesh(
                         request.getPosition(),
                         this.nodeData.getNodeGeometry(parentNodeId),

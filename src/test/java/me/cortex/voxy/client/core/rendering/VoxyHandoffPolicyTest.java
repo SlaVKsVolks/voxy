@@ -601,6 +601,14 @@ public final class VoxyHandoffPolicyTest {
                 renderDataFactory,
                 "System.getProperty(\"voxy.surfacePreviewTopFacesOnly\", \"true\")",
                 "Surface preview top-face-only mode must be default-on to prevent volumetric shell artifacts");
+        requireSourceContains(
+                renderDataFactory,
+                "voxy.surfaceRepresentativeRejectDarkBuriedBlocks",
+                "Provider far terrain must reject dark buried opaque real-chunk representatives instead of meshing cave/ore sheets");
+        requireSourceContains(
+                renderDataFactory,
+                "shouldSuppressBuriedSurfaceRepresentativeBlock",
+                "RenderDataFactory must apply a named dark buried surface-representative suppression policy before mesh emission");
 
         Path mapper = Path.of("src/main/java/me/cortex/voxy/common/world/other/Mapper.java");
         requireSourceContains(
@@ -1087,6 +1095,22 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/NodeManager.java"),
                 "getNodeProviderTerrainPassMask",
                 "Provider current refresh must use pass masks retained from built geometry, not only the render index");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/NodeManager.java"),
+                "hasProviderRenderableChildCoverage",
+                "Parent fallback suppression must require renderable child coverage, not only child-existence metadata");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/NodeManager.java"),
+                "requestHasProviderRenderableChildMesh",
+                "Atomic child commits must retain parent fallback when child results are metadata-only or empty");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/NodeManager.java"),
+                "recordRenderCellRemoved",
+                "Empty mesh updates must remove render ownership without counting a parent suppression event");
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/sodium/provider/VoxyFarTerrainProvider.java"),
+                "recordRenderCellRemoved",
+                "Provider diagnostics need a non-suppression path for empty or filtered render cells");
         requireSourceContains(
                 Path.of("src/main/resources/assets/voxy/shaders/lod/gl46/cmdgen.comp"),
                 "providerRenderListPassMask",

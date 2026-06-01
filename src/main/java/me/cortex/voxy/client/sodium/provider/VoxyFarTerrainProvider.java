@@ -193,6 +193,12 @@ public final class VoxyFarTerrainProvider {
         this.refreshBoundaryDiagnostics();
     }
 
+    public void recordRenderCellRemoved(long sectionKey) {
+        this.renderIndex.remove(sectionKey);
+        this.boundaryCoverage.remove(sectionKey);
+        this.refreshBoundaryDiagnostics();
+    }
+
     public void recordBoundarySource(
             VoxelizedSection.SourceKind sourceKind,
             VoxelizedSection.LightSourceKind lightSourceKind,

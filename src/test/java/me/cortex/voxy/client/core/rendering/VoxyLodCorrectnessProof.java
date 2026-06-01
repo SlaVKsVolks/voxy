@@ -973,6 +973,17 @@ public final class VoxyLodCorrectnessProof {
         if (!rejectsBuriedOre) {
             failures.add("mipper: buried solid block can still win over visible foliage canopy");
         }
+        boolean rejectsTwoSampleBuriedOre = MipperRepresentativePolicy.shouldPreferFoliageCanopyOverSolid(
+                true,
+                2,
+                6,
+                0,
+                0,
+                true
+        );
+        if (!rejectsTwoSampleBuriedOre) {
+            failures.add("mipper: two visible foliage samples can still leak a dark buried solid representative");
+        }
         boolean rejectsFluidOverride = MipperRepresentativePolicy.shouldPreferFoliageCanopyOverSolid(
                 true,
                 4,

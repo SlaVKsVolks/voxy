@@ -3,7 +3,7 @@ package me.cortex.voxy.common.world.other;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 
 public final class MipperRepresentativePolicy {
-    private static final int FOLIAGE_CANOPY_MIN_SAMPLES = 3;
+    private static final int FOLIAGE_CANOPY_MIN_SAMPLES = 2;
 
     private MipperRepresentativePolicy() {
     }

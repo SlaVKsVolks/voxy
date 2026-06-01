@@ -28,6 +28,13 @@ public class RenderDataFactory {
     private static final boolean SURFACE_PREVIEW_TOP_FACES_ONLY = Boolean.parseBoolean(
             System.getProperty("voxy.surfacePreviewTopFacesOnly", "true")
     );
+    private static final boolean SURFACE_REPRESENTATIVE_REJECT_DARK_BURIED_BLOCKS = Boolean.parseBoolean(
+            System.getProperty("voxy.surfaceRepresentativeRejectDarkBuriedBlocks", "true")
+    );
+    private static final int SURFACE_REPRESENTATIVE_MIN_SKY_LIGHT = Integer.getInteger(
+            "voxy.surfaceRepresentativeMinSkyLight",
+            8
+    );
 
     private static final boolean VERIFY_MESHING = VoxyCommon.isVerificationFlagOn("verifyMeshing");
 
@@ -70,6 +77,7 @@ public class RenderDataFactory {
 
     private int quadCount = 0;
     private boolean surfacePreviewTopFacesOnly;
+    private boolean surfaceRepresentativeMeshFilter;
     private VoxyTerrainFailureReason lastProviderValidationFailure = VoxyTerrainFailureReason.NONE;
 
     private final OccupancySet occupancy;
@@ -267,6 +275,12 @@ public class RenderDataFactory {
                             return blockId | (1 << 31);
                         }
 
+                        if (shouldSuppressBuriedSurfaceRepresentativeBlock(block, modelMetadata)) {
+                            sectionData[i * 2] = (block & (0xFFL << 56)) >>> 1;
+                            sectionData[i * 2 + 1] = 0;
+                            continue;
+                        }
+
                         sectionData[i * 2] = packPartialQuadData(modelId, block, modelMetadata);
                         sectionData[i * 2 + 1] = modelMetadata;
 
@@ -297,6 +311,22 @@ public class RenderDataFactory {
             }
         }
         return neighborAcquireMskAndFlags;
+    }
+
+    private boolean shouldSuppressBuriedSurfaceRepresentativeBlock(long block, long modelMetadata) {
+        if (!this.surfaceRepresentativeMeshFilter) {
+            return false;
+        }
+        int skyLight = Mapper.getLightId(block) & 0x0F;
+        if (skyLight >= SURFACE_REPRESENTATIVE_MIN_SKY_LIGHT) {
+            return false;
+        }
+        if (ModelQueries.isFluid(modelMetadata)
+                || ModelQueries.containsFluid(modelMetadata)
+                || ModelQueries.lightEmission(modelMetadata) > 0) {
+            return false;
+        }
+        return ModelQueries.isFullyOpaque(modelMetadata);
     }
 
     private static int getNeighborMsk(long notEmpty, int i) {
@@ -1832,6 +1862,10 @@ public class RenderDataFactory {
         this.surfacePreviewTopFacesOnly = SURFACE_PREVIEW_TOP_FACES_ONLY
                 && (sourceKind == VoxelizedSection.SourceKind.SURFACE_PREVIEW
                 || sourceKind == VoxelizedSection.SourceKind.SYNTHETIC_PREVIEW);
+        this.surfaceRepresentativeMeshFilter = SURFACE_REPRESENTATIVE_REJECT_DARK_BURIED_BLOCKS
+                && sourceKind == VoxelizedSection.SourceKind.REAL_CHUNK
+                && section.getConfidence().atLeast(VoxelizedSection.Confidence.MEDIUM)
+                && VoxelizedSection.isTrustedLight(section.getLightSourceKind());
         int neighborMskAndFlags = this.prepareSectionData(section._unsafeGetRawDataArray());
         VoxyTerrainFailureReason providerValidation = this.validatePreparedSectionForProvider(section, neighborMskAndFlags);
         if (providerValidation != VoxyTerrainFailureReason.NONE
