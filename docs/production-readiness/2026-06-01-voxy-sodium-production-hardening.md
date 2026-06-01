@@ -47,6 +47,19 @@ The `implementation_plan.md` and `fifty_issues_report.md` review identified addi
 
 These are code-side fixes only. They do not prove final visual parity with Sodium, Iris, biome tint blending, fog, or shader color-space behavior.
 
+## 100-Issue Hardening Follow-Up
+
+The first follow-up slice closes additional source-level blockers from the 100-issue review:
+
+- `voxy_only` is harness-only and requires `voxy.allowHarnessVoxyOnlyMode=true`; normal gameplay can no longer disable Sodium near chunks through visual attribution mode alone.
+- Provider draw decisions no longer call the mutating Sodium pass gate while only computing a draw decision.
+- Boundary coverage now lets current exact/fallback coverage clear stale misses, while current rejected/missing coverage still fails closed.
+- MDIC provider render-list CPU state is capped to the provider SSBO capacity so diagnostics and draw dispatch do not claim more ids than were uploaded.
+- Serialized section loading now rejects too-short buffers, invalid LUT payload bounds, and per-voxel LUT indices outside the decoded LUT before unsafe reads.
+- Server LoD tile stores expose deterministic close, and client cache swaps close the old mounted store.
+
+These changes reduce production risk around near-field ownership, stale diagnostics, corrupt storage data, and cache lifecycle. They still do not complete shader parity, full pass separation, Sodium material equivalence, or live visual correctness.
+
 ## Production Architecture Rules
 
 The provider is the runtime authority for far terrain:

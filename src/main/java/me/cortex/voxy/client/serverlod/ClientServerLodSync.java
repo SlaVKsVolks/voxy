@@ -92,8 +92,10 @@ public final class ClientServerLodSync {
     public static int clearCache() {
         activeSyncId = nextSyncId++;
         pendingSyncTicks = 0;
-        int deleted = CACHE.clear();
+        ClientLodCache oldCache = CACHE;
+        int deleted = oldCache.clear();
         CACHE = new ClientLodCache(defaultCacheRoot());
+        oldCache.close();
         return deleted;
     }
 
@@ -310,6 +312,10 @@ public final class ClientServerLodSync {
 
         private int clear() {
             return deleteChildren(this.root);
+        }
+
+        private void close() {
+            this.store.close();
         }
 
         private int deleteChildren(Path path) {
