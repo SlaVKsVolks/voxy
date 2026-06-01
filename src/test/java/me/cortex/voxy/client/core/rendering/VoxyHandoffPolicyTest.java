@@ -1330,6 +1330,9 @@ public final class VoxyHandoffPolicyTest {
         if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Committed mesh with stale request epoch after invalidation must fail stale-upload authority");
         }
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).reason() != VoxyTerrainFailureReason.STALE_UPLOAD) {
+            throw new AssertionError("Stale committed mesh draw decision must report STALE_UPLOAD");
+        }
         if (provider.staleUploadRejections() == 0) {
             throw new AssertionError("Committed mesh with stale request epoch after invalidation must increment stale rejection diagnostics");
         }

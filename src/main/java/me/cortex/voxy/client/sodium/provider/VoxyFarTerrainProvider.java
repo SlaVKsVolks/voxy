@@ -768,6 +768,9 @@ public final class VoxyFarTerrainProvider {
         if (FAIL_UNSUPPORTED_PASS_RENDERED.equals(authorityVerdict)) {
             return VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED;
         }
+        if (FAIL_STALE_UPLOAD_RENDERED.equals(authorityVerdict)) {
+            return VoxyTerrainFailureReason.STALE_UPLOAD;
+        }
         return VoxyTerrainFailureReason.MISSING_EXACT_CHILD;
     }
 

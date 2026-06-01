@@ -608,6 +608,10 @@ public final class VoxyLodCorrectnessProof {
             failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
                     + ": stale committed mesh entered the provider render list");
         }
+        if (staleCommitProvider.drawDecision(VoxyTerrainPass.SOLID).reason() != VoxyTerrainFailureReason.STALE_UPLOAD) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale committed mesh draw decision used the wrong failure reason");
+        }
         if (staleCommitProvider.staleUploadRejections() == 0) {
             failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
                     + ": stale committed mesh was not diagnosed");
