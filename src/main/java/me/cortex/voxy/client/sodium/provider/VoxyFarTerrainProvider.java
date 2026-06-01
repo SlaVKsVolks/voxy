@@ -189,6 +189,7 @@ public final class VoxyFarTerrainProvider {
     public void recordParentSuppressed(long sectionKey) {
         this.parentSuppressedSections.incrementAndGet();
         this.renderIndex.remove(sectionKey);
+        this.boundaryCoverage.remove(sectionKey);
         this.refreshBoundaryDiagnostics();
     }
 

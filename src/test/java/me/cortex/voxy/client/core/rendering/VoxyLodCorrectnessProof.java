@@ -615,6 +615,13 @@ public final class VoxyLodCorrectnessProof {
             failures.add("coverage:" + VoxyTerrainFailureReason.STALE_UPLOAD
                     + ": stale upload rejection did not clear only stale exact boundary coverage");
         }
+        VoxyFarTerrainProvider parentSuppressionCoverageProvider = new VoxyFarTerrainProvider(snapshot);
+        parentSuppressionCoverageProvider.recordCommittedMesh(302L, fallbackRenderCell, 39, 1L);
+        parentSuppressionCoverageProvider.recordCommittedMesh(303L, exactRenderCell, 40, 1L);
+        parentSuppressionCoverageProvider.recordParentSuppressed(302L);
+        if (parentSuppressionCoverageProvider.diagnostics().boundaryParentFallbackSections() != 0) {
+            failures.add("coverage: parent suppression did not clear suppressed parent fallback boundary coverage");
+        }
         listProvider.invalidateSection(101L);
         if (listProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
             failures.add("mesh: provider render list still drew after all approved mesh ids were invalidated");

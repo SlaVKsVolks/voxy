@@ -70,6 +70,7 @@ public final class VoxyHandoffPolicyTest {
         assertProviderSkipDecisionPreservesExplicitSectionCount();
         assertProviderCurrentRefreshRetainsChildWhenParentIsSuppressed();
         assertProviderStaleUploadRejectionClearsBoundaryCoverage();
+        assertProviderParentSuppressionClearsBoundaryCoverage();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -334,6 +335,15 @@ public final class VoxyHandoffPolicyTest {
         }
         if (!harness.contains("voxy.minecraft_lod_visual_authority.v1")) {
             throw new AssertionError("Harness visual correctness probe must emit the stable authority schema");
+        }
+        if (!harness.contains("voxy.minecraft_screen_space_visual_metrics.v1")) {
+            throw new AssertionError("Harness visual correctness authority must include Minecraft-side framebuffer metrics");
+        }
+        if (!harness.contains("screen_space_blank_dominated")) {
+            throw new AssertionError("Harness visual correctness authority must fail closed on blank-dominated frames");
+        }
+        if (!harness.contains("screen_space_central_blank_band_pixels")) {
+            throw new AssertionError("Harness visual correctness authority must reject central blank bands before sidecar confirmation");
         }
         requireSourceContains(
                 Path.of("../../../tools/render-stack/Send-HarnessCliCommand.ps1"),
@@ -1518,6 +1528,46 @@ public final class VoxyHandoffPolicyTest {
         }
         if (!java.util.Arrays.equals(provider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {912})) {
             throw new AssertionError("Stale upload rejection must keep unrelated provider mesh ids");
+        }
+    }
+
+    private static void assertProviderParentSuppressionClearsBoundaryCoverage() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long parentSection = WorldEngine.getWorldSectionId(1, 0, 0, 0);
+        long exactSection = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        VoxyTerrainOwnershipCell parentCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                1,
+                VoxyTerrainOwnership.VOXY_PARENT_FALLBACK,
+                VoxyTerrainFailureReason.VALID_PARENT_FALLBACK
+        );
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(parentSection, parentCell, 921, 1L);
+        provider.recordCommittedMesh(exactSection, exactCell, 922, 1L);
+
+        provider.recordParentSuppressed(parentSection);
+
+        if (provider.diagnostics().boundaryParentFallbackSections() != 0) {
+            throw new AssertionError("Parent suppression must remove suppressed parent fallback boundary coverage");
+        }
+        if (!java.util.Arrays.equals(provider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {922})) {
+            throw new AssertionError("Parent suppression must keep unrelated exact provider mesh ids");
         }
     }
 
