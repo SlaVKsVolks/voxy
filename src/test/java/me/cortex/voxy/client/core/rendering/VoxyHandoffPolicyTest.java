@@ -61,6 +61,7 @@ public final class VoxyHandoffPolicyTest {
         assertProviderCurrentRefreshDoesNotInventSolidPassOwnership();
         assertProviderRejectedMeshCommitIsDiagnosticFailure();
         assertProviderCurrentRefreshPrunesStaleRenderListEntries();
+        assertProviderCurrentRefreshPreservesRejectedBoundaryFailure();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -1185,6 +1186,41 @@ public final class VoxyHandoffPolicyTest {
         if (!java.util.Arrays.equals(meshIds, new int[] {601})) {
             throw new AssertionError("Current refresh must prune stale provider render-list mesh ids, got "
                     + java.util.Arrays.toString(meshIds));
+        }
+    }
+
+    private static void assertProviderCurrentRefreshPreservesRejectedBoundaryFailure() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long rejectedSection = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        VoxyTerrainOwnershipCell rejectedCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.REJECTED_INVALID,
+                VoxyTerrainFailureReason.INVALID_PALETTE_ID
+        );
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentOwnershipDecision(rejectedSection, rejectedCell);
+        provider.finishCurrentOwnershipRefresh();
+
+        if (provider.diagnostics().boundaryRejectedSections() == 0) {
+            throw new AssertionError("Current refresh must preserve rejected boundary ownership");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_UNTRUSTED_SOURCE.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Current rejected boundary ownership must fail terrain coverage");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_UNTRUSTED_SOURCE.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Current rejected boundary ownership must fail provider authority");
         }
     }
 

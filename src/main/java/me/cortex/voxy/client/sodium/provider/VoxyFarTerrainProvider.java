@@ -370,7 +370,13 @@ public final class VoxyFarTerrainProvider {
         switch (cell.ownership()) {
             case VOXY_EXACT_LOD -> this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.EXACT);
             case VOXY_PARENT_FALLBACK -> this.recordBoundaryCoverageNoRefresh(sectionKey, BoundaryCoverageState.FALLBACK);
-            case VANILLA_EXACT, REJECTED_INVALID, EMPTY_OUTSIDE_DISTANCE -> {
+            case REJECTED_INVALID -> this.recordBoundaryCoverageNoRefresh(
+                    sectionKey,
+                    cell.reason() == VoxyTerrainFailureReason.MISSING_EXACT_CHILD
+                            ? BoundaryCoverageState.MISSING
+                            : BoundaryCoverageState.REJECTED
+            );
+            case VANILLA_EXACT, EMPTY_OUTSIDE_DISTANCE -> {
             }
         }
     }
