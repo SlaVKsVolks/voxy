@@ -3,6 +3,7 @@ package me.cortex.voxy.client.core.rendering.hierachical;
 class SingleNodeRequest {
     private final long nodePos;
     private int mesh;
+    private int providerTerrainPassMask;
     private byte childExistence;
     private int setMsk;
     private long stateEpoch;
@@ -17,10 +18,11 @@ class SingleNodeRequest {
         this.childExistence = childExistence;
     }
 
-    public int setMesh(int mesh) {
+    public int setMesh(int mesh, int providerTerrainPassMask) {
         this.setMsk |= 1;
         int prev = this.mesh;
         this.mesh = mesh;
+        this.providerTerrainPassMask = providerTerrainPassMask;
         return prev;
     }
 
@@ -34,6 +36,10 @@ class SingleNodeRequest {
 
     public int getMesh() {
         return this.mesh;
+    }
+
+    public int getProviderTerrainPassMask() {
+        return this.providerTerrainPassMask;
     }
 
     public byte getChildExistence() {

@@ -573,7 +573,11 @@ public class NodeManager {
                     return;
                 }
                 this.clearGeometryRequestEpoch(pos);
-                request.setMesh(this.uploadReplaceSection(pos, request.getMesh(), sectionResult));
+                int providerTerrainPassMask = sectionResult.providerTerrainPassMask();
+                request.setMesh(
+                        this.uploadReplaceSection(pos, request.getMesh(), sectionResult),
+                        providerTerrainPassMask
+                );
 
                 //sectionResult has a cheeky childExistence field that we can use to set the request too, this is just
                 // because processChildChange is only ever invoked when child existence changes, so we still need to
@@ -606,7 +610,12 @@ public class NodeManager {
                     return;
                 }
                 this.clearGeometryRequestEpoch(pos);
-                request.setChildMesh(childId, this.uploadReplaceSection(pos, request.getChildMesh(childId), sectionResult));
+                int providerTerrainPassMask = sectionResult.providerTerrainPassMask();
+                request.setChildMesh(
+                        childId,
+                        this.uploadReplaceSection(pos, request.getChildMesh(childId), sectionResult),
+                        providerTerrainPassMask
+                );
                 if (!request.hasChildChildExistence(childId)) {
                     request.setChildChildExistence(childId, sectionResult.childExistence);
                 }
@@ -734,7 +743,16 @@ public class NodeManager {
         this.geometryManager.removeSection(id);
     }
 
+    private void setNodeGeometryWithProviderPassMask(int nodeId, int geometryId, int providerTerrainPassMask) {
+        this.nodeData.setNodeGeometry(nodeId, geometryId);
+        this.nodeData.setNodeProviderTerrainPassMask(
+                nodeId,
+                this.isRenderableGeometryId(geometryId) ? providerTerrainPassMask : 0
+        );
+    }
+
     private int uploadReplaceSection(long pos, int meshId, BuiltSection section) {
+        int providerTerrainPassMask = section.providerTerrainPassMask();
         if (section.isEmpty()) {
             if (meshId != NULL_GEOMETRY_ID && meshId != EMPTY_GEOMETRY_ID) {
                 this.geometryManager.removeSection(meshId);
@@ -758,7 +776,7 @@ public class NodeManager {
                     providerOwnership,
                     uploadedMeshId,
                     section.requestEpoch,
-                    section.providerTerrainPassMask()
+                    providerTerrainPassMask
             );
         }
         return uploadedMeshId;
@@ -844,7 +862,7 @@ public class NodeManager {
         if (this.farTerrainProvider != null) {
             this.farTerrainProvider.recordParentSuppressed(pos);
         }
-        this.nodeData.setNodeGeometry(nodeId, EMPTY_GEOMETRY_ID);
+        this.setNodeGeometryWithProviderPassMask(nodeId, EMPTY_GEOMETRY_ID, 0);
         RenderCorrectnessDiagnostics.nodeEvent(
                 "geometry_change",
                 pos,
@@ -893,6 +911,7 @@ public class NodeManager {
 
     private int updateNodeGeometry(int node, BuiltSection geometry) {
         int previousGeometry = this.nodeData.getNodeGeometry(node);
+        int providerTerrainPassMask = geometry.providerTerrainPassMask();
         int newGeometry = EMPTY_GEOMETRY_ID;
         if (previousGeometry != EMPTY_GEOMETRY_ID && previousGeometry != NULL_GEOMETRY_ID) {
             if (!geometry.isEmpty()) {
@@ -917,13 +936,13 @@ public class NodeManager {
                         providerOwnership,
                         newGeometry,
                         geometry.requestEpoch,
-                        geometry.providerTerrainPassMask()
+                        providerTerrainPassMask
                 );
             }
         }
 
         if (previousGeometry != newGeometry) {
-            this.nodeData.setNodeGeometry(node, newGeometry);
+            this.setNodeGeometryWithProviderPassMask(node, newGeometry, providerTerrainPassMask);
             this.syncTopLevelRenderMembership(this.nodeData.nodePosition(node), node, "geometry_update");
             RenderCorrectnessDiagnostics.nodeEvent(
                     "geometry_change",
@@ -1308,7 +1327,7 @@ public class NodeManager {
                 Logger.error("Setting geometry to EMPTY while request is inflight");
                 //TODO: figure out a better way to mark this for tracing verificaction and like less confusion
                 // (instead of like EMPTY_GEOMETRY_ID do like INFLIGHT_GEOMETRY_ID)
-                this.nodeData.setNodeGeometry(nodeId, EMPTY_GEOMETRY_ID);
+                this.setNodeGeometryWithProviderPassMask(nodeId, EMPTY_GEOMETRY_ID, 0);
             }
 
             if (this.nodeData.getChildPtr(nodeId) != SENTINEL_EMPTY_CHILD_PTR) {//This should only ever be the sentinal ptr
@@ -1331,7 +1350,7 @@ public class NodeManager {
         int geometry = this.nodeData.getNodeGeometry(nodeId);
         if (geometry != NULL_GEOMETRY_ID && geometry != EMPTY_GEOMETRY_ID) {
             this.removeGeometryCached(pos, geometry);
-            this.nodeData.setNodeGeometry(nodeId, EMPTY_GEOMETRY_ID);
+            this.setNodeGeometryWithProviderPassMask(nodeId, EMPTY_GEOMETRY_ID, 0);
             Logger.warn("Dropped stale inner-node geometry before zero-child collapse at " + WorldEngine.pprintPos(pos));
         }
 
@@ -1559,12 +1578,12 @@ public class NodeManager {
         int id = this.nodeData.allocate();
         this.nodeData.setNodePosition(id, request.getPosition());
         byte childExistence = request.getChildExistence();
-        this.nodeData.setNodeGeometry(id, this.suppressUnrefinableParentMesh(
+        this.setNodeGeometryWithProviderPassMask(id, this.suppressUnrefinableParentMesh(
                 request.getPosition(),
                 request.getMesh(),
                 childExistence,
                 "suppress_unrefinable_top_level_parent_mesh"
-        ));
+        ), request.getProviderTerrainPassMask());
         this.nodeData.setNodeChildExistence(id, childExistence);
         RenderCorrectnessDiagnostics.nodeEvent(
                 "request_finish",
@@ -1668,12 +1687,12 @@ public class NodeManager {
                 this.nodeData.setNodePosition(childNodeId, childPos);
                 byte childExistence = request.getChildChildExistence(childIdx);
                 this.nodeData.setNodeChildExistence(childNodeId, childExistence);
-                this.nodeData.setNodeGeometry(childNodeId, this.suppressUnrefinableParentMesh(
+                this.setNodeGeometryWithProviderPassMask(childNodeId, this.suppressUnrefinableParentMesh(
                         childPos,
                         request.getChildMesh(childIdx),
                         childExistence,
                         "suppress_unrefinable_leaf_child_parent_mesh"
-                ));
+                ), request.getChildProviderTerrainPassMask(childIdx));
                 //Mark for update
                 this.invalidateNode(childNodeId);
                 //this.clearId(childNodeId);//Clear the id
@@ -1690,11 +1709,11 @@ public class NodeManager {
             //Free request
             this.childRequests.release(requestId);
             if (this.isRenderableGeometryId(this.nodeData.getNodeGeometry(parentNodeId))) {
-                this.nodeData.setNodeGeometry(parentNodeId, this.suppressParentMesh(
+                this.setNodeGeometryWithProviderPassMask(parentNodeId, this.suppressParentMesh(
                         request.getPosition(),
                         this.nodeData.getNodeGeometry(parentNodeId),
                         "child_commit_parent_mesh_suppressed"
-                ));
+                ), 0);
             }
             //Update the parent
             this.nodeData.setChildPtr(parentNodeId, base);
@@ -1820,12 +1839,12 @@ public class NodeManager {
                     this.nodeData.setNodePosition(childId, childPos);
                     byte childExistence = request.getChildChildExistence(i);
                     this.nodeData.setNodeChildExistence(childId, childExistence);
-                    this.nodeData.setNodeGeometry(childId, this.suppressUnrefinableParentMesh(
+                    this.setNodeGeometryWithProviderPassMask(childId, this.suppressUnrefinableParentMesh(
                             childPos,
                             request.getChildMesh(i),
                             childExistence,
                             "suppress_unrefinable_inner_child_parent_mesh"
-                    ));
+                    ), request.getChildProviderTerrainPassMask(i));
 
                     //Mark for update
                     this.invalidateNode(childId);
@@ -2320,7 +2339,7 @@ public class NodeManager {
             }
             //Remove geometry and set to null
             this.removeGeometryCached(pos, meshId);
-            this.nodeData.setNodeGeometry(nodeId, NULL_GEOMETRY_ID);
+            this.setNodeGeometryWithProviderPassMask(nodeId, NULL_GEOMETRY_ID, 0);
             this.invalidateNode(nodeId);//Only need to invalidate on change
             this.nodeData.unmarkNodeGeometryInFlight(nodeId);//Remove geometry inflight as well, its removed
         } else {
@@ -2541,7 +2560,13 @@ public class NodeManager {
                 if (providerOwnership == null) {
                     continue;
                 }
-                this.farTerrainProvider.recordCurrentRenderCell(pos, providerOwnership, geometry, this.activeSectionEpochs.get(pos));
+                this.farTerrainProvider.recordCurrentRenderCell(
+                        pos,
+                        providerOwnership,
+                        geometry,
+                        this.activeSectionEpochs.get(pos),
+                        this.nodeData.getNodeProviderTerrainPassMask(nodeId)
+                );
                 recorded++;
             }
         } finally {

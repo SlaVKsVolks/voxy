@@ -390,8 +390,11 @@ public final class VoxyFarTerrainProvider {
     }
 
     public void recordCurrentRenderCell(long sectionKey, VoxyTerrainOwnershipCell cell, int meshId, long requestEpoch) {
+        this.recordCurrentRenderCell(sectionKey, cell, meshId, requestEpoch, this.renderIndex.passMaskForSection(sectionKey, 0));
+    }
+
+    public void recordCurrentRenderCell(long sectionKey, VoxyTerrainOwnershipCell cell, int meshId, long requestEpoch, int passMask) {
         if (cell.rendersVoxyGeometry() && meshId >= 0) {
-            int passMask = this.renderIndex.passMaskForSection(sectionKey, 0);
             if (passMask == 0 && cell.ownership() == VoxyTerrainOwnership.VOXY_PARENT_FALLBACK) {
                 VoxyProviderRenderIndex.RecordResult suppressionResult = this.renderIndex.suppressIncomingParent(sectionKey);
                 if (suppressionResult.suppressedIncomingParent()) {

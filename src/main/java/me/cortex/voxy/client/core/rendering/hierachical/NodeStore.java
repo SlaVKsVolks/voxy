@@ -152,6 +152,17 @@ public final class NodeStore {
         this.localNodeData[idx] = data;
     }
 
+    public int getNodeProviderTerrainPassMask(int nodeId) {
+        return (int) this.localNodeData[id2idx(nodeId) + 3];
+    }
+
+    public void setNodeProviderTerrainPassMask(int nodeId, int passMask) {
+        if (passMask < 0) {
+            throw new IllegalArgumentException("Provider terrain pass mask must not be negative: " + passMask);
+        }
+        this.localNodeData[id2idx(nodeId) + 3] = passMask;
+    }
+
     public int getChildPtr(int nodeId) {
         long data = this.localNodeData[id2idx(nodeId)+1];
         int nodePtr = (int) ((data>>24)&NODE_ID_MSK);

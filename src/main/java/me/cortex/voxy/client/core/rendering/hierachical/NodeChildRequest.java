@@ -6,6 +6,7 @@ class NodeChildRequest {
     private final long nodePos;
 
     private final int[] childStates = new int[]{-1,-1,-1,-1,-1,-1,-1,-1};
+    private final int[] childProviderTerrainPassMasks = new int[8];
     private final byte[] childChildExistence = new byte[]{(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0};
     private final long[] childStateEpochs = new long[8];
 
@@ -46,7 +47,7 @@ class NodeChildRequest {
         return this.childChildExistence[childIdx];
     }
 
-    public int setChildMesh(int childIdx, int mesh) {
+    public int setChildMesh(int childIdx, int mesh, int providerTerrainPassMask) {
         if ((this.mask&(1<<childIdx))==0) {
             throw new IllegalStateException("Tried setting child mesh when child isnt in mask");
         }
@@ -56,11 +57,19 @@ class NodeChildRequest {
 
         int prev = this.childStates[childIdx];
         this.childStates[childIdx] = mesh;
+        this.childProviderTerrainPassMasks[childIdx] = providerTerrainPassMask;
         if (isFirstInsert) {
             return -1;
         } else {
             return prev;
         }
+    }
+
+    public int getChildProviderTerrainPassMask(int childIdx) {
+        if ((this.mask&(1<<childIdx))==0) {
+            throw new IllegalStateException("Tried getting provider pass mask of child not in mask");
+        }
+        return this.childProviderTerrainPassMasks[childIdx];
     }
 
     public int removeAndUnRequire(int childIdx) {
@@ -74,6 +83,7 @@ class NodeChildRequest {
         this.existenceMask &= (byte) ~MSK;
         int mesh = this.childStates[childIdx];
         this.childStates[childIdx] = -1;
+        this.childProviderTerrainPassMasks[childIdx] = 0;
         if ((prev&MSK)==0) {
             return -1;
         } else {

@@ -59,6 +59,7 @@ public final class VoxyHandoffPolicyTest {
         assertProviderCoverageRequiresRenderOwnedBoundaryMesh();
         assertProviderCurrentRefreshDoesNotRetainStaleGaps();
         assertProviderCurrentRefreshDoesNotInventSolidPassOwnership();
+        assertProviderCurrentRefreshAcceptsKnownSolidPassOwnership();
         assertProviderRejectedMeshCommitIsDiagnosticFailure();
         assertProviderCurrentRefreshPrunesStaleRenderListEntries();
         assertProviderCurrentRefreshPreservesRejectedBoundaryFailure();
@@ -1052,6 +1053,10 @@ public final class VoxyHandoffPolicyTest {
                 "boolean exactLodAvailable = level == 0 && parentFallbackAvailable;",
                 "Provider ownership classification must not treat coarse parent child-existence metadata as exact rendered LoD coverage");
         requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/NodeManager.java"),
+                "getNodeProviderTerrainPassMask",
+                "Provider current refresh must use pass masks retained from built geometry, not only the render index");
+        requireSourceContains(
                 Path.of("src/main/resources/assets/voxy/shaders/lod/gl46/cmdgen.comp"),
                 "providerRenderListPassMask",
                 "Provider command generation must receive a pass mask for mixed SOLID/CUTOUT mesh ids");
@@ -1140,6 +1145,47 @@ public final class VoxyHandoffPolicyTest {
         }
         if (VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Unknown pass geometry must not pass provider render authority");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshAcceptsKnownSolidPassOwnership() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long currentSection = WorldEngine.getWorldSectionId(0, 6, 0, 6);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                8,
+                8,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(
+                currentSection,
+                exactCell,
+                94,
+                1L,
+                VoxyProviderRenderCell.PASS_SOLID
+        );
+        provider.finishCurrentOwnershipRefresh();
+
+        if (!provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Known SOLID current-refresh geometry must enter the provider render list");
+        }
+        if (!VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Known SOLID current-refresh geometry must pass provider render authority");
+        }
+        if (provider.diagnostics().boundaryRejectedSections() != 0) {
+            throw new AssertionError("Known SOLID current-refresh geometry must not be counted as rejected boundary coverage");
         }
     }
 
