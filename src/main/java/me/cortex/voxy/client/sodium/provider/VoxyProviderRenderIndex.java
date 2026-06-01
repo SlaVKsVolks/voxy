@@ -14,17 +14,26 @@ public final class VoxyProviderRenderIndex {
     public record RecordResult(
             boolean recorded,
             boolean suppressedIncomingParent,
-            long[] suppressedAncestorSectionKeys
+            long[] suppressedAncestorSectionKeys,
+            long[] retainedDescendantSectionKeys
     ) {
         public RecordResult {
             suppressedAncestorSectionKeys = suppressedAncestorSectionKeys == null
                     ? new long[0]
                     : suppressedAncestorSectionKeys.clone();
+            retainedDescendantSectionKeys = retainedDescendantSectionKeys == null
+                    ? new long[0]
+                    : retainedDescendantSectionKeys.clone();
         }
 
         @Override
         public long[] suppressedAncestorSectionKeys() {
             return this.suppressedAncestorSectionKeys.clone();
+        }
+
+        @Override
+        public long[] retainedDescendantSectionKeys() {
+            return this.retainedDescendantSectionKeys.clone();
         }
 
         public int suppressedAncestorCount() {
@@ -61,23 +70,32 @@ public final class VoxyProviderRenderIndex {
         if (cell.renderOwned()) {
             VoxyProviderRenderCell existing = this.cells.get(cell.sectionKey());
             if (cell.equals(existing)) {
-                return new RecordResult(true, false, new long[0]);
+                return new RecordResult(true, false, new long[0], new long[0]);
             }
             if (this.hasRenderOwnedDescendant(cell.sectionKey())) {
-                this.cells.remove(cell.sectionKey());
-                this.epoch.incrementAndGet();
-                return new RecordResult(false, true, new long[0]);
+                return this.suppressIncomingParent(cell.sectionKey());
             }
             long[] suppressedAncestors = this.removeRenderOwnedAncestors(cell.sectionKey());
             this.cells.put(cell.sectionKey(), cell);
             this.epoch.incrementAndGet();
-            return new RecordResult(true, false, suppressedAncestors);
+            return new RecordResult(true, false, suppressedAncestors, new long[0]);
         } else {
             if (this.cells.remove(cell.sectionKey()) != null) {
                 this.epoch.incrementAndGet();
             }
-            return new RecordResult(false, false, new long[0]);
+            return new RecordResult(false, false, new long[0], new long[0]);
         }
+    }
+
+    public RecordResult suppressIncomingParent(long sectionKey) {
+        long[] retainedDescendants = this.renderOwnedDescendantSectionKeys(sectionKey);
+        if (retainedDescendants.length == 0) {
+            return new RecordResult(false, false, new long[0], new long[0]);
+        }
+        if (this.cells.remove(sectionKey) != null) {
+            this.epoch.incrementAndGet();
+        }
+        return new RecordResult(false, true, new long[0], retainedDescendants);
     }
 
     public long size() {
@@ -127,6 +145,11 @@ public final class VoxyProviderRenderIndex {
         return cell == null ? fallbackPassMask : cell.passMask();
     }
 
+    public VoxyTerrainOwnership ownershipForSection(long sectionKey) {
+        VoxyProviderRenderCell cell = this.cells.get(sectionKey);
+        return cell == null ? VoxyTerrainOwnership.EMPTY_OUTSIDE_DISTANCE : cell.ownership();
+    }
+
     private long[] removeRenderOwnedAncestors(long sectionKey) {
         ArrayList<Long> suppressed = new ArrayList<>();
         for (Long existingKey : this.cells.keySet()) {
@@ -153,6 +176,23 @@ public final class VoxyProviderRenderIndex {
             }
         }
         return false;
+    }
+
+    private long[] renderOwnedDescendantSectionKeys(long sectionKey) {
+        ArrayList<Long> descendants = new ArrayList<>();
+        for (VoxyProviderRenderCell existing : this.cells.values()) {
+            long existingKey = existing.sectionKey();
+            if (existingKey != sectionKey
+                    && existing.renderOwned()
+                    && this.isAncestorOf(sectionKey, existingKey)) {
+                descendants.add(existingKey);
+            }
+        }
+        long[] sectionKeys = new long[descendants.size()];
+        for (int i = 0; i < descendants.size(); i++) {
+            sectionKeys[i] = descendants.get(i);
+        }
+        return sectionKeys;
     }
 
     private boolean isAncestorOf(long possibleAncestor, long possibleDescendant) {

@@ -527,12 +527,43 @@ public final class VoxyLodCorrectnessProof {
         if (provider.diagnostics().unsupportedPassSkips() == 0) {
             failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED + ": unsupported pass was not counted");
         }
+        long unsupportedSkipsBeforeMaterialRejection = provider.diagnostics().unsupportedPassSkips();
+        provider.recordMaterialRejected(VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED);
+        if (provider.diagnostics().unsupportedPassSkips() <= unsupportedSkipsBeforeMaterialRejection) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": unsupported material rejection did not increment unsupported pass skips");
+        }
         VoxyFarTerrainProvider renderedUnsupportedProvider = new VoxyFarTerrainProvider(snapshot);
         renderedUnsupportedProvider.recordRenderedPass(VoxyTerrainPass.FLUID);
         if (renderedUnsupportedProvider.diagnostics().unsupportedPassRenderedSections() == 0
                 || "PASS".equals(renderedUnsupportedProvider.diagnostics().sodiumMaterialParityVerdict())) {
             failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
                     + ": unsupported rendered pass did not fail material parity");
+        }
+        renderedUnsupportedProvider.recordCommittedMesh(91L, exactRenderCell, 10, 1L);
+        renderedUnsupportedProvider.recordRenderedPass(VoxyTerrainPass.TRANSLUCENT);
+        if (!VoxyFarTerrainProvider.FAIL_UNSUPPORTED_PASS_RENDERED.equals(
+                renderedUnsupportedProvider.diagnostics().terrainCoverageVerdict())) {
+            failures.add("coverage:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": unsupported rendered pass did not fail terrain coverage");
+        }
+        VoxyProviderDrawDecision deniedSupportedDecision = renderedUnsupportedProvider.drawDecision(VoxyTerrainPass.SOLID);
+        if (deniedSupportedDecision.draw()) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": unsupported rendered pass did not deny supported provider draw");
+        }
+        if (!Arrays.equals(deniedSupportedDecision.meshIds(), new int[] {10})) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                    + ": denied supported draw decision lost provider mesh ids");
+        }
+        VoxyProviderDrawDecision countedSkipDecision = VoxyProviderDrawDecision.skip(
+                VoxyTerrainPass.SOLID,
+                3,
+                VoxyFarTerrainProvider.FAIL_GAP,
+                VoxyTerrainFailureReason.MISSING_EXACT_CHILD
+        );
+        if (countedSkipDecision.sectionCount() != 3 || countedSkipDecision.meshIds().length != 0) {
+            failures.add("mesh: explicit skip decision did not preserve diagnostic section count");
         }
         provider.recordInvalidRenderedSection(VoxyTerrainFailureReason.UNRESOLVED_BLOCK_STATE);
         if (!VoxyFarTerrainProvider.FAIL_INVALID_RENDERED.equals(provider.diagnostics().terrainCoverageVerdict())) {
@@ -576,6 +607,14 @@ public final class VoxyLodCorrectnessProof {
         if (staleFilteredList.epoch() <= initialListEpoch) {
             failures.add("mesh: provider render list epoch did not advance after stale upload rejection");
         }
+        VoxyFarTerrainProvider staleCoverageProvider = new VoxyFarTerrainProvider(snapshot);
+        staleCoverageProvider.recordCommittedMesh(300L, exactRenderCell, 37, 1L);
+        staleCoverageProvider.recordCommittedMesh(301L, exactRenderCell, 38, 1L);
+        staleCoverageProvider.recordStaleUploadRejection(300L);
+        if (staleCoverageProvider.diagnostics().boundaryExactSections() != 1) {
+            failures.add("coverage:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale upload rejection did not clear only stale exact boundary coverage");
+        }
         listProvider.invalidateSection(101L);
         if (listProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
             failures.add("mesh: provider render list still drew after all approved mesh ids were invalidated");
@@ -599,6 +638,19 @@ public final class VoxyLodCorrectnessProof {
         if (staleListProvider.drawDecision(VoxyTerrainPass.SOLID).renderList().epoch() != stableEpoch) {
             failures.add("mesh: no-op current provider refresh churned render-list epoch");
         }
+        VoxyFarTerrainProvider suppressedParentRefreshProvider = new VoxyFarTerrainProvider(snapshot);
+        long retainedChildSection = WorldEngine.getWorldSectionId(0, 15, 0, 0);
+        long suppressedParentSection = WorldEngine.getWorldSectionId(1, 7, 0, 0);
+        suppressedParentRefreshProvider.recordCommittedMesh(retainedChildSection, exactRenderCell, 35, 1L);
+        suppressedParentRefreshProvider.beginCurrentOwnershipRefresh();
+        suppressedParentRefreshProvider.recordCurrentRenderCell(suppressedParentSection, fallbackRenderCell, 36, 2L);
+        suppressedParentRefreshProvider.finishCurrentOwnershipRefresh();
+        if (!Arrays.equals(suppressedParentRefreshProvider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {35})) {
+            failures.add("mesh: current provider refresh pruned child coverage after suppressing incoming parent fallback");
+        }
+        if (!suppressedParentRefreshProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            failures.add("coverage: current provider refresh did not keep retained child coverage drawable after suppressing incoming parent fallback");
+        }
 
         VoxyFarTerrainProvider staleCommitProvider = new VoxyFarTerrainProvider(snapshot);
         long staleCommitSection = WorldEngine.getWorldSectionId(0, 13, 0, 0);
@@ -612,9 +664,38 @@ public final class VoxyLodCorrectnessProof {
             failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
                     + ": stale committed mesh draw decision used the wrong failure reason");
         }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(
+                staleCommitProvider.diagnostics().terrainCoverageVerdict())) {
+            failures.add("coverage:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale committed mesh did not fail terrain coverage");
+        }
         if (staleCommitProvider.staleUploadRejections() == 0) {
             failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
                     + ": stale committed mesh was not diagnosed");
+        }
+
+        VoxyFarTerrainProvider staleRefreshProvider = new VoxyFarTerrainProvider(snapshot);
+        long staleRefreshSection = WorldEngine.getWorldSectionId(0, 14, 0, 0);
+        staleRefreshProvider.invalidateSection(staleRefreshSection);
+        staleRefreshProvider.beginCurrentOwnershipRefresh();
+        staleRefreshProvider.recordCurrentRenderCell(staleRefreshSection, exactRenderCell, 34, 0L);
+        staleRefreshProvider.finishCurrentOwnershipRefresh();
+        if (staleRefreshProvider.diagnostics().boundaryExactSections() != 0) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale current-refresh mesh counted as exact boundary coverage");
+        }
+        if (staleRefreshProvider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale current-refresh mesh entered the provider render list");
+        }
+        if (staleRefreshProvider.drawDecision(VoxyTerrainPass.SOLID).reason() != VoxyTerrainFailureReason.STALE_UPLOAD) {
+            failures.add("mesh:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale current-refresh mesh draw decision used the wrong failure reason");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(
+                staleRefreshProvider.diagnostics().terrainCoverageVerdict())) {
+            failures.add("coverage:" + VoxyTerrainFailureReason.STALE_UPLOAD
+                    + ": stale current-refresh mesh did not fail terrain coverage");
         }
 
         VoxyFarTerrainProvider mixedRejectedProvider = new VoxyFarTerrainProvider(snapshot);

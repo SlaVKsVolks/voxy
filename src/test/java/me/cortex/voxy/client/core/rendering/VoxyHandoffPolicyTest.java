@@ -65,6 +65,11 @@ public final class VoxyHandoffPolicyTest {
         assertProviderCurrentRefreshIgnoresMissingTraversalPlaceholders();
         assertProviderCurrentRefreshDoesNotChurnRenderListEpoch();
         assertProviderRejectsCommittedMeshAfterInvalidation();
+        assertProviderRejectsCurrentRefreshMeshAfterInvalidation();
+        assertProviderMaterialUnsupportedPassIsDiagnosed();
+        assertProviderSkipDecisionPreservesExplicitSectionCount();
+        assertProviderCurrentRefreshRetainsChildWhenParentIsSuppressed();
+        assertProviderStaleUploadRejectionClearsBoundaryCoverage();
         assertProviderDrawAuthorityContract();
         VoxyLodCorrectnessProof.runAssertions();
     }
@@ -950,6 +955,19 @@ public final class VoxyHandoffPolicyTest {
         if (!VoxyFarTerrainProvider.FAIL_UNSUPPORTED_PASS_RENDERED.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Rendering an unsupported pass must fail the provider authority verdict");
         }
+        if (!VoxyFarTerrainProvider.FAIL_UNSUPPORTED_PASS_RENDERED.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Rendering an unsupported pass must fail the terrain coverage verdict");
+        }
+        VoxyProviderDrawDecision unsupportedRenderedSolidDecision = provider.drawDecision(VoxyTerrainPass.SOLID);
+        if (unsupportedRenderedSolidDecision.draw()) {
+            throw new AssertionError("Unsupported rendered pass must deny SOLID provider drawing");
+        }
+        if (!java.util.Arrays.equals(unsupportedRenderedSolidDecision.meshIds(), new int[] {7})) {
+            throw new AssertionError("Denied supported pass draw decision must keep provider mesh ids for diagnostics");
+        }
+        if (unsupportedRenderedSolidDecision.renderList().epoch() != solidList.epoch()) {
+            throw new AssertionError("Denied supported pass draw decision must keep provider render-list epoch");
+        }
 
         requireSourceContains(
                 Path.of("src/main/java/me/cortex/voxy/client/core/AbstractRenderPipeline.java"),
@@ -1330,11 +1348,176 @@ public final class VoxyHandoffPolicyTest {
         if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.providerRenderAuthorityVerdict())) {
             throw new AssertionError("Committed mesh with stale request epoch after invalidation must fail stale-upload authority");
         }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Committed mesh with stale request epoch after invalidation must fail stale-upload coverage");
+        }
         if (provider.drawDecision(VoxyTerrainPass.SOLID).reason() != VoxyTerrainFailureReason.STALE_UPLOAD) {
             throw new AssertionError("Stale committed mesh draw decision must report STALE_UPLOAD");
         }
         if (provider.staleUploadRejections() == 0) {
             throw new AssertionError("Committed mesh with stale request epoch after invalidation must increment stale rejection diagnostics");
+        }
+    }
+
+    private static void assertProviderRejectsCurrentRefreshMeshAfterInvalidation() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long section = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+
+        provider.invalidateSection(section);
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(section, exactCell, 802, 0L);
+        provider.finishCurrentOwnershipRefresh();
+
+        if (provider.diagnostics().boundaryExactSections() != 0) {
+            throw new AssertionError("Stale current-refresh mesh must not count as exact boundary coverage");
+        }
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Current-refresh mesh with stale request epoch after invalidation must not draw");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Current-refresh mesh with stale request epoch after invalidation must fail stale-upload authority");
+        }
+        if (!VoxyFarTerrainProvider.FAIL_STALE_UPLOAD_RENDERED.equals(provider.diagnostics().terrainCoverageVerdict())) {
+            throw new AssertionError("Current-refresh mesh with stale request epoch after invalidation must fail stale-upload coverage");
+        }
+        if (provider.drawDecision(VoxyTerrainPass.SOLID).reason() != VoxyTerrainFailureReason.STALE_UPLOAD) {
+            throw new AssertionError("Stale current-refresh mesh draw decision must report STALE_UPLOAD");
+        }
+    }
+
+    private static void assertProviderMaterialUnsupportedPassIsDiagnosed() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+
+        provider.recordMaterialRejected(VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED);
+
+        if (provider.diagnostics().unsupportedPassSkips() == 0) {
+            throw new AssertionError("Unsupported render-pass material rejection must increment unsupported pass skips");
+        }
+        if (provider.diagnostics().invalidRejectedCells() == 0) {
+            throw new AssertionError("Unsupported render-pass material rejection must still count as rejected invalid material");
+        }
+    }
+
+    private static void assertProviderSkipDecisionPreservesExplicitSectionCount() {
+        VoxyProviderDrawDecision decision = VoxyProviderDrawDecision.skip(
+                VoxyTerrainPass.SOLID,
+                3,
+                VoxyFarTerrainProvider.FAIL_GAP,
+                VoxyTerrainFailureReason.MISSING_EXACT_CHILD
+        );
+        if (decision.draw()) {
+            throw new AssertionError("Explicit skip decision must not draw");
+        }
+        if (decision.sectionCount() != 3) {
+            throw new AssertionError("Explicit skip decision must preserve the supplied diagnostic section count");
+        }
+        if (decision.meshIds().length != 0) {
+            throw new AssertionError("Explicit skip decision without a render list must not invent mesh ids");
+        }
+    }
+
+    private static void assertProviderCurrentRefreshRetainsChildWhenParentIsSuppressed() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long parentSection = WorldEngine.getWorldSectionId(1, 0, 0, 0);
+        long childSection = WorldEngine.getWorldSectionId(0, 1, 0, 0);
+        VoxyTerrainOwnershipCell childCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        VoxyTerrainOwnershipCell parentCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                1,
+                VoxyTerrainOwnership.VOXY_PARENT_FALLBACK,
+                VoxyTerrainFailureReason.VALID_PARENT_FALLBACK
+        );
+        provider.recordCommittedMesh(childSection, childCell, 901, 1L);
+
+        provider.beginCurrentOwnershipRefresh();
+        provider.recordCurrentRenderCell(parentSection, parentCell, 902, 2L);
+        provider.finishCurrentOwnershipRefresh();
+
+        if (!java.util.Arrays.equals(provider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {901})) {
+            throw new AssertionError("Current refresh must retain an existing child mesh when incoming parent fallback is suppressed");
+        }
+        if (!provider.drawDecision(VoxyTerrainPass.SOLID).draw()) {
+            throw new AssertionError("Current refresh must keep retained child coverage drawable after suppressing incoming parent fallback");
+        }
+        if (!VoxyFarTerrainProvider.PASS_PROVIDER_RENDER_AUTHORITY.equals(provider.providerRenderAuthorityVerdict())) {
+            throw new AssertionError("Current refresh must restore retained child boundary coverage after suppressing incoming parent fallback");
+        }
+        if (provider.parentSuppressedSections() == 0) {
+            throw new AssertionError("Current refresh must diagnose the suppressed incoming parent fallback");
+        }
+    }
+
+    private static void assertProviderStaleUploadRejectionClearsBoundaryCoverage() {
+        VoxyFarTerrainProvider provider = new VoxyFarTerrainProvider(new VoxyFarTerrainProviderSnapshot(
+                "voxy_merged",
+                64,
+                8,
+                2,
+                6,
+                64,
+                true,
+                false
+        ));
+        long staleSection = WorldEngine.getWorldSectionId(0, 6, 0, 0);
+        long validSection = WorldEngine.getWorldSectionId(0, 7, 0, 0);
+        VoxyTerrainOwnershipCell exactCell = new VoxyTerrainOwnershipCell(
+                6,
+                0,
+                0,
+                VoxyTerrainOwnership.VOXY_EXACT_LOD,
+                VoxyTerrainFailureReason.NONE
+        );
+        provider.recordCommittedMesh(staleSection, exactCell, 911, 1L);
+        provider.recordCommittedMesh(validSection, exactCell, 912, 1L);
+
+        provider.recordStaleUploadRejection(staleSection);
+
+        if (provider.diagnostics().boundaryExactSections() != 1) {
+            throw new AssertionError("Stale upload rejection must remove stale section boundary coverage");
+        }
+        if (!java.util.Arrays.equals(provider.drawDecision(VoxyTerrainPass.SOLID).meshIds(), new int[] {912})) {
+            throw new AssertionError("Stale upload rejection must keep unrelated provider mesh ids");
         }
     }
 

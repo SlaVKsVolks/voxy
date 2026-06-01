@@ -39,6 +39,22 @@ public record VoxyProviderDrawDecision(
         );
     }
 
+    public static VoxyProviderDrawDecision skip(
+            VoxyTerrainPass pass,
+            VoxyProviderRenderList renderList,
+            String authorityVerdict,
+            VoxyTerrainFailureReason reason
+    ) {
+        return new VoxyProviderDrawDecision(
+                pass,
+                false,
+                renderList.sectionCount(),
+                renderList,
+                authorityVerdict,
+                reason
+        );
+    }
+
     public VoxyProviderDrawDecision {
         renderList = renderList == null
                 ? VoxyProviderRenderList.empty(pass, 0, authorityVerdict)
