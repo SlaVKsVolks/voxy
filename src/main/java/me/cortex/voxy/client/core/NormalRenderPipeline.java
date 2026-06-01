@@ -10,7 +10,7 @@ import me.cortex.voxy.client.core.rendering.hierachical.HierarchicalOcclusionTra
 import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.util.GPUTiming;
-import net.minecraft.client.Minecraft;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import org.joml.Matrix4f;
 
 import java.util.List;
@@ -58,6 +58,7 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
 
     @Override
     protected int setup(Viewport<?> viewport, int sourceFB, int srcWidth, int srcHeight) {
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "setup", "start", "sourceFb=" + sourceFB + " src=" + srcWidth + "x" + srcHeight);
         if (this.colourTex == null || this.colourTex.getHeight() != viewport.height || this.colourTex.getWidth() != viewport.width) {
             if (this.colourTex != null) {
                 this.colourTex.free();
@@ -68,8 +69,11 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
             this.colourTex = new GlTexture().store(GL_RGBA8, 1, viewport.width, viewport.height);
             this.colourSSAOTex = new GlTexture().store(GL_RGBA8, 1, viewport.width, viewport.height);
 
-            this.fb.framebuffer.bind(GL_COLOR_ATTACHMENT0, this.colourTex).verify();
-            this.fbSSAO.bind(this.fb.getDepthAttachmentType(), this.fb.getDepthTex()).bind(GL_COLOR_ATTACHMENT0, this.colourSSAOTex).verify();
+            this.fb.framebuffer.bind(GL_COLOR_ATTACHMENT0, this.colourTex);
+            this.fbSSAO.bind(this.fb.getDepthAttachmentType(), this.fb.getDepthTex()).bind(GL_COLOR_ATTACHMENT0, this.colourSSAOTex);
+
+            this.fb.framebuffer.verify();
+            this.fbSSAO.verify();
 
 
             glTextureParameterf(this.colourTex.id, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -80,29 +84,31 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         }
 
         if (!this.initDepthStencil(sourceFB, this.fb.framebuffer.id, viewport.width, viewport.height, viewport.width, viewport.height)) {
+            RenderCorrectnessDiagnostics.call("normal_pipeline", "setup", "failed", "initDepthStencil");
             return 0;
         }
 
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "setup", "done", "depthTex=" + this.fb.getDepthTex().id);
         return this.fb.getDepthTex().id;
     }
 
     @Override
     protected void postOpaquePreTranslucent(Viewport<?> viewport, int sourceFrameBuffer) {
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "postOpaquePreTranslucent", "start", "sourceFb=" + sourceFrameBuffer);
         GPUTiming.INSTANCE.marker("ao");
         this.ssao.computeSSAO(viewport, this.colourSSAOTex, this.colourTex, this.fb.getDepthTex(), sourceFrameBuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, this.fbSSAO.id);
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "postOpaquePreTranslucent", "done", "fbSSAO=" + this.fbSSAO.id);
     }
 
     @Override
     protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "finish", "start", "sourceFb=" + sourceFrameBuffer);
         this.finalBlit.bind();
         var vrs = IGetVoxyRenderSystem.getNullable();
         float fogStart = vrs != null ? vrs.getCapturedFogStart() : RenderSystem.getShaderFogStart();
         float fogEnd   = vrs != null ? vrs.getCapturedFogEnd()   : RenderSystem.getShaderFogEnd();
         float[] fogColor = vrs != null ? vrs.getCapturedFogColor() : RenderSystem.getShaderFogColor();
-
-        float renderDistance = Minecraft.getInstance().gameRenderer.getRenderDistance();
-        boolean fogCoversAllRendering = fogEnd < renderDistance;
 
         if (this.useEnvFog) {
             if (Math.abs(fogEnd - fogStart) > 1) {
@@ -123,26 +129,31 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         glBindTextureUnit(3, this.colourSSAOTex.id);
 
         //Do alpha blending
-        //Unbelievably jank hack, only blit out to the framebuffer if we are rendering fog
-        if (!fogCoversAllRendering) {
-            glEnable(GL_BLEND);
-            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            AbstractRenderPipeline.transformBlitDepth(this.finalBlit, this.fb.getDepthTex().id, sourceFrameBuffer, viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
-            glDisable(GL_BLEND);
-        } else {
-            glDisable(GL_STENCIL_TEST);
-            glDisable(GL_DEPTH_TEST);
-        }
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        AbstractRenderPipeline.transformBlitDepth(
+                this.finalBlit,
+                this.fb.getDepthTex().id,
+                sourceFrameBuffer,
+                viewport,
+                new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView),
+                true,
+                this.properties.closerEqualDepthCompare()
+        );
+        glDisable(GL_BLEND);
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "finish", "done", "sourceFb=" + sourceFrameBuffer);
         //glBlitNamedFramebuffer(this.fbSSAO.id, sourceFrameBuffer, 0,0, viewport.width, viewport.height, 0,0, viewport.width, viewport.height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
 
     @Override
     public void setupAndBindOpaque(Viewport<?> viewport) {
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "setupAndBindOpaque", "start", "fb=" + this.fb.framebuffer.id);
         this.fb.bind();
     }
 
     @Override
     public void setupAndBindTranslucent(Viewport<?> viewport) {
+        RenderCorrectnessDiagnostics.call("normal_pipeline", "setupAndBindTranslucent", "start", "fbSSAO=" + this.fbSSAO.id);
         glBindFramebuffer(GL_FRAMEBUFFER, this.fbSSAO.id);
     }
 

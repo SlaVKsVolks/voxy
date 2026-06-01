@@ -78,6 +78,18 @@ public abstract class VoxyInstance {
     public UnifiedServiceThreadPool getThreadPool() {
         return this.threadPool;
     }
+    public int getDedicatedWorkerThreadCount() {
+        return this.threadPool.getThreadCount();
+    }
+    public int getDedicatedWorkerTargetThreadCount() {
+        return this.threadPool.getTargetThreadCount();
+    }
+    public int getDedicatedWorkerRetireRequests() {
+        return this.threadPool.getRetireRequests();
+    }
+    public int getTotalServiceJobs() {
+        return this.threadPool.serviceManager.getTotalJobs();
+    }
     public VoxelIngestService getIngestService() {
         return this.ingestService;
     }

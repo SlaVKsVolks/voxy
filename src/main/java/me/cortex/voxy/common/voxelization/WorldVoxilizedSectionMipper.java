@@ -32,7 +32,10 @@ public class WorldVoxilizedSectionMipper {
             data[16*16*16 + i++] = Mipper.mip(
                     data[q|G(0,0,0)], data[q|G(1,0,0)], data[q|G(0,0,1)], data[q|G(1,0,1)],
                     data[q|G(0,1,0)], data[q|G(1,1,0)], data[q|G(0,1,1)], data[q|G(1,1,1)],
-                    mapper
+                    mapper,
+                    section.sourceKind,
+                    section.confidence,
+                    section.lightSourceKind
             );
             if (q == MSK)
                 break;
@@ -48,7 +51,10 @@ public class WorldVoxilizedSectionMipper {
                             Mipper.mip(
                                     data[H(x, y, z)],       data[H(x+1, y, z)],       data[H(x, y, z+1)],      data[H(x+1, y, z+1)],
                                     data[H(x, y+1, z)],  data[H(x+1, y+1, z)],  data[H(x, y+1, z+1)], data[H(x+1, y+1, z+1)],
-                                    mapper);
+                                    mapper,
+                                    section.sourceKind,
+                                    section.confidence,
+                                    section.lightSourceKind);
                 }
             }
         }
@@ -62,7 +68,10 @@ public class WorldVoxilizedSectionMipper {
                             Mipper.mip(
                                     data[I(x, y, z)],       data[I(x+1, y, z)],       data[I(x, y, z+1)],      data[I(x+1, y, z+1)],
                                     data[I(x, y+1, z)],   data[I(x+1, y+1, z)],  data[I(x, y+1, z+1)], data[I(x+1, y+1, z+1)],
-                                    mapper);
+                                    mapper,
+                                    section.sourceKind,
+                                    section.confidence,
+                                    section.lightSourceKind);
                 }
             }
         }
@@ -72,6 +81,9 @@ public class WorldVoxilizedSectionMipper {
                 Mipper.mip(
                         data[J(0, 0, 0)], data[J(1, 0, 0)], data[J(0, 0, 1)], data[J(1, 0, 1)],
                         data[J(0, 1, 0)], data[J(1, 1, 0)], data[J(0, 1, 1)], data[J(1, 1, 1)],
-                        mapper);
+                        mapper,
+                        section.sourceKind,
+                        section.confidence,
+                        section.lightSourceKind);
     }
 }

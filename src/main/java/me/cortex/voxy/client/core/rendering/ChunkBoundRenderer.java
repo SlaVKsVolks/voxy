@@ -13,6 +13,7 @@ import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -42,6 +43,9 @@ public class ChunkBoundRenderer {
 
     private final LongOpenHashSet addQueue = new LongOpenHashSet();
     private final LongOpenHashSet remQueue = new LongOpenHashSet();
+    private static final int MAX_STALE_REMOVE_WARNINGS = Integer.getInteger("voxy.chunkBoundStaleRemoveWarnLimit", 16);
+    private int staleRemoveWarnings;
+    private long staleRemoveSuppressed;
 
     private final AbstractRenderPipeline pipeline;
     public ChunkBoundRenderer(AbstractRenderPipeline pipeline) {
@@ -167,7 +171,20 @@ public class ChunkBoundRenderer {
     private void _remPos(long pos) {
         int idx = this.chunk2idx.remove(pos);
         if (idx == -1) {
-            Logger.warn("Chunk not in map: " + pos);
+            this.staleRemoveSuppressed++;
+            if (this.staleRemoveWarnings < MAX_STALE_REMOVE_WARNINGS) {
+                this.staleRemoveWarnings++;
+                Logger.warn("Ignoring stale Voxy chunk-bound remove for " + pos
+                        + " count=" + this.staleRemoveSuppressed);
+            }
+            RenderCorrectnessDiagnostics.ingestLifecycle(
+                    "chunk_bound_stale_remove",
+                    this.remQueue.size(),
+                    this.chunk2idx.size(),
+                    this.staleRemoveSuppressed,
+                    0L,
+                    "pos=" + pos
+            );
             return;
         }
         if (idx == this.chunk2idx.size()) {
@@ -191,7 +208,14 @@ public class ChunkBoundRenderer {
 
     private void _addPos(long pos) {
         if (this.chunk2idx.containsKey(pos)) {
-            Logger.warn("Chunk already in map: " + pos);
+            RenderCorrectnessDiagnostics.ingestLifecycle(
+                    "chunk_bound_duplicate_add",
+                    this.addQueue.size(),
+                    this.chunk2idx.size(),
+                    this.staleRemoveSuppressed,
+                    0L,
+                    "pos=" + pos
+            );
             return;
         }
         this.ensureSize1();//Resize if needed
@@ -231,6 +255,10 @@ public class ChunkBoundRenderer {
 
     public void reset() {
         this.chunk2idx.clear();
+        this.addQueue.clear();
+        this.remQueue.clear();
+        this.staleRemoveWarnings = 0;
+        this.staleRemoveSuppressed = 0L;
     }
 
     public void free() {

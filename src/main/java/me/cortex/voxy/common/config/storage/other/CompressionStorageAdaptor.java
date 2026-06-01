@@ -1,5 +1,6 @@
 package me.cortex.voxy.common.config.storage.other;
 
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.compressors.CompressorConfig;
 import me.cortex.voxy.common.config.compressors.StorageCompressor;
@@ -22,7 +23,13 @@ public class CompressionStorageAdaptor extends DelegatingStorageAdaptor {
         if (data == null) {
             return null;
         }
-        return this.compressor.decompress(data);
+        try {
+            return this.compressor.decompress(data);
+        } catch (RuntimeException exception) {
+            Logger.error("Failed to decompress Voxy section " + key + ", deleting corrupt stored data", exception);
+            this.delegate.deleteSectionData(key);
+            return null;
+        }
     }
 
     @Override

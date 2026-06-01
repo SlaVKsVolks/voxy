@@ -43,7 +43,11 @@ void main() {
     depth = REDUCTION2(FAR+CLOSER_SIGN*(2.0f/((1<<24)-1)), depth);
     depth = NDC2SCREEN_DEPTH(depth);
 
-    depth = gl_DepthRange.diff * depth + gl_DepthRange.near;//TODO: dont think this is right at all so should fix this
+    depth = gl_DepthRange.diff * depth + gl_DepthRange.near;
+    if (depth != depth) {
+        discard;
+    }
+    depth = clamp(depth, min(gl_DepthRange.near, gl_DepthRange.far), max(gl_DepthRange.near, gl_DepthRange.far));
 
     gl_FragDepth = depth;
 

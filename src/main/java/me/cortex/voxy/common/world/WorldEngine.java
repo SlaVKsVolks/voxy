@@ -5,6 +5,7 @@ import me.cortex.voxy.common.config.section.SectionStorage;
 import me.cortex.voxy.common.util.TrackedObject;
 import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.commonImpl.VoxyInstance;
+import me.cortex.voxy.commonImpl.serverlod.ServerLodSectionTileCodec;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.invoke.VarHandle;
@@ -60,6 +61,7 @@ public class WorldEngine {
 
         this.storage = storage;
         this.mapper = new Mapper(this.storage);
+        ServerLodSectionTileCodec.setRuntimeMapper(this.mapper);
         //5 cache size bits means that the section tracker has 32 separate maps that it uses
         this.sectionTracker = new ActiveSectionTracker(6, storage::loadSection, cacheSize, this);
     }

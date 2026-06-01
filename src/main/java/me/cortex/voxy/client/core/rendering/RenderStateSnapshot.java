@@ -1,5 +1,8 @@
 package me.cortex.voxy.client.core.rendering;
 
+import me.cortex.voxy.client.VoxyClient;
+import me.cortex.voxy.client.core.util.IrisUtil;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
@@ -12,6 +15,16 @@ public record RenderStateSnapshot(
         double cameraY,
         double cameraZ,
         float sectionRenderDistance,
+        int visualTerrainDistanceBlocks,
+        int realChunkRadiusChunks,
+        int handoffStartChunks,
+        int lodEndChunks,
+        String terrainPass,
+        boolean sodiumChunkRenderingEnabled,
+        boolean irisShaderPackEnabled,
+        int depthTargetIdentity,
+        float fogStart,
+        float fogEnd,
         Matrix4f vanillaProjection,
         Matrix4f projection,
         Matrix4f modelView,
@@ -29,6 +42,16 @@ public record RenderStateSnapshot(
             0.0,
             0.0,
             0.0,
+            0.0f,
+            0,
+            0,
+            0,
+            0,
+            "UNKNOWN",
+            true,
+            false,
+            0,
+            0.0f,
             0.0f,
             new Matrix4f(),
             new Matrix4f(),
@@ -57,6 +80,16 @@ public record RenderStateSnapshot(
                 viewport.cameraY,
                 viewport.cameraZ,
                 sectionRenderDistance,
+                VoxyHandoffPolicy.visualTerrainDistanceBlocks(),
+                VoxyHandoffPolicy.realRenderDistanceChunks(),
+                VoxyHandoffPolicy.handoffStartChunks(),
+                VoxyHandoffPolicy.voxyLodEndChunks(),
+                "SODIUM_COMPATIBLE_PROVIDER",
+                VoxyClient.sodiumChunkRenderingEnabled(),
+                IrisUtil.irisShaderPackEnabled(),
+                0,
+                0.0f,
+                VoxyHandoffPolicy.visualTerrainDistanceBlocks(),
                 safeCopy(viewport.vanillaProjection),
                 projection,
                 modelView,

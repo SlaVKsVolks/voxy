@@ -29,13 +29,17 @@ public class SectionSavingService {
         try {
             //Unmark it dirty here (if it wasnt or w/e) so that it doesnt pointlessly resave (in theory this should be safe to do)
             section.setNotDirty();
-            if (section.exchangeIsInSaveQueue(false)) {
-                task.engine.storage.saveSection(section);
-            }
+            task.engine.storage.saveSection(section);
         } catch (Exception e) {
+            section.markDirty();
             Logger.error("Voxy saver had an exception while executing please check logs and report error", e);
+        } finally {
+            section.exchangeIsInSaveQueue(false);
+            if (section.shouldSave()) {
+                task.engine.saveSection(section, true, false);
+            }
+            section.release();
         }
-        section.release();
     }
 
     /*

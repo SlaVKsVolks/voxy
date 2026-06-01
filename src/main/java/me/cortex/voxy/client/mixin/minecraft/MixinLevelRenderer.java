@@ -1,5 +1,6 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
+import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.VoxyClientInstance;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
@@ -31,9 +32,31 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
 
     @Inject(method = "allChanged()V", at = @At("RETURN"), order = 900)//We want to inject before sodium
     private void voxy$reloadVoxyRenderer(CallbackInfo ci) {
-        this.voxy$shutdownRenderer();
-        if (this.level != null) {
+        if (this.level == null) {
+            this.voxy$shutdownRenderer();
+            VoxyClient.resetVisualAttributionModeForRendererLifecycle("level null");
+            return;
+        }
+        if (this.renderer == null) {
             this.voxy$createRenderer();
+            return;
+        }
+
+        VoxyRenderSystem oldRenderer = this.renderer;
+        VoxyRenderSystem newRenderer;
+        try {
+            newRenderer = this.voxy$buildRenderer();
+        } catch (RuntimeException e) {
+            Logger.error("Keeping previous Voxy renderer because renderer reload failed", e);
+            return;
+        }
+        if (newRenderer != null) {
+            this.renderer = newRenderer;
+            try {
+                oldRenderer.shutdown();
+            } catch (RuntimeException e) {
+                Logger.error("Previous Voxy renderer failed during post-swap shutdown", e);
+            }
         }
     }
 
@@ -41,12 +64,14 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     private void voxy$captureSetWorld(ClientLevel world, CallbackInfo ci) {
         if (this.level != world) {
             this.voxy$shutdownRenderer();
+            VoxyClient.resetVisualAttributionModeForRendererLifecycle("level change");
         }
     }
 
     @Inject(method = "close", at = @At("HEAD"))
     private void voxy$injectClose(CallbackInfo ci) {
         this.voxy$shutdownRenderer();
+        VoxyClient.resetVisualAttributionModeForRendererLifecycle("level renderer close");
     }
 
     @Override
@@ -60,30 +85,42 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     @Override
     public void voxy$createRenderer() {
         if (this.renderer != null) throw new IllegalStateException("Cannot have multiple renderers");
+        this.renderer = this.voxy$buildRenderer();
+    }
+
+    @Unique
+    private @Nullable VoxyRenderSystem voxy$buildRenderer() {
         if (!VoxyConfig.CONFIG.enabled) {
             Logger.info("Not creating renderer due to disabled");
-            return;
+            return null;
         }
+        VoxyClient.resetVisualAttributionModeForRendererLifecycle("renderer build");
         if (!VoxyConfig.CONFIG.isRenderingEnabled()) {
-            Logger.info("Not creating renderer due to disabled rendering");
-            return;
+            Logger.info("Not creating renderer due to disabled rendering enabled="
+                    + VoxyConfig.CONFIG.enabled
+                    + " enableRendering=" + VoxyConfig.CONFIG.enableRendering
+                    + " voxyAvailable=" + VoxyCommon.isAvailable()
+                    + " instancePresent=" + (VoxyCommon.getInstance() != null));
+            return null;
         }
         if (this.level == null) {
             Logger.error("Not creating renderer due to null world");
-            return;
+            return null;
         }
         var instance = (VoxyClientInstance)VoxyCommon.getInstance();
         if (instance == null) {
             Logger.error("Not creating renderer due to null instance");
-            return;
+            return null;
         }
         WorldEngine world = WorldIdentifier.ofEngine(this.level);
         if (world == null) {
             Logger.error("Null world selected");
-            return;
+            return null;
         }
         try {
-            this.renderer = new VoxyRenderSystem(world, instance.getServiceManager());
+            VoxyRenderSystem newRenderer = new VoxyRenderSystem(world, instance.getServiceManager());
+            instance.updateDedicatedThreads();
+            return newRenderer;
         } catch (RuntimeException e) {
             if (IrisUtil.irisShaderPackEnabled()) {
                 IrisUtil.disableIrisShaders();
@@ -91,6 +128,6 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
                 throw e;
             }
         }
-        instance.updateDedicatedThreads();
+        return null;
     }
 }

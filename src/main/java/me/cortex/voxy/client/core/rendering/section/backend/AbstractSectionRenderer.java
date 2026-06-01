@@ -9,6 +9,7 @@ import me.cortex.voxy.client.core.model.ModelStore;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import me.cortex.voxy.client.core.rendering.section.geometry.BasicSectionGeometryData;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderList;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.Direction;
@@ -67,6 +68,9 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
     public abstract void renderTranslucent(T viewport);
     public abstract T createViewport();
     public abstract void free();
+    public void setProviderRenderList(VoxyProviderRenderList renderList) {}
+    public void clearProviderRenderList() {}
+    public void setProviderRenderListStaleSkipCallback(Runnable callback) {}
 
     public J getGeometryManager() {
         return this.geometryManager;

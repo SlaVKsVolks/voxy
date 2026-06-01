@@ -9,12 +9,20 @@ import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.lwjgl.opengl.GL11.GL_NEAREST;
+import static org.lwjgl.opengl.GL11.GL_RENDERER;
 import static org.lwjgl.opengl.GL11.GL_TEXTURE_2D;
 import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
 import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
+import static org.lwjgl.opengl.GL11.GL_VENDOR;
+import static org.lwjgl.opengl.GL11.GL_VERSION;
 import static org.lwjgl.opengl.GL15.glDeleteBuffers;
 import static org.lwjgl.opengl.GL30.GL_DEPTH_STENCIL;
 import static org.lwjgl.opengl.GL30C.GL_MAP_READ_BIT;
@@ -28,6 +36,7 @@ import static org.lwjgl.opengl.GL45C.glCreateFramebuffers;
 import static org.lwjgl.opengl.NVXGPUMemoryInfo.*;
 
 public class Capabilities {
+    private static final Pattern GL_VERSION_PATTERN = Pattern.compile("(\\d+)\\.(\\d+)");
 
     public static final Capabilities INSTANCE = new Capabilities();
 
@@ -49,9 +58,22 @@ public class Capabilities {
     public final boolean isAmd;
     public final boolean nvBarryCoords;
     public final boolean hasBrokenDepthSampler;
+    public final String glVersion;
+    public final String glVendor;
+    public final String glRenderer;
+    public final int glMajor;
+    public final int glMinor;
+    public final boolean meetsOpenGl46;
 
     public Capabilities() {
         var cap = GL.getCapabilities();
+        this.glVersion = safeGlString(GL_VERSION);
+        this.glVendor = safeGlString(GL_VENDOR);
+        this.glRenderer = safeGlString(GL_RENDERER);
+        int[] parsedVersion = parseVersion(this.glVersion);
+        this.glMajor = parsedVersion[0];
+        this.glMinor = parsedVersion[1];
+        this.meetsOpenGl46 = this.glMajor > 4 || (this.glMajor == 4 && this.glMinor >= 6);
         this.sparseBuffer = cap.GL_ARB_sparse_buffer;
         this.compute = cap.glDispatchComputeIndirect != 0;
         this.indirectParameters = cap.glMultiDrawElementsIndirectCountARB != 0;
@@ -85,8 +107,8 @@ public class Capabilities {
         this.ssboMaxSize = glGetInteger64(GL_MAX_SHADER_STORAGE_BLOCK_SIZE);
         this.ssboBindingAlignment = glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
 
-        this.isMesa = glGetString(GL_VERSION).toLowerCase(Locale.ROOT).contains("mesa");
-        var vendor = glGetString(GL_VENDOR).toLowerCase(Locale.ROOT);
+        this.isMesa = this.glVersion.toLowerCase(Locale.ROOT).contains("mesa");
+        var vendor = this.glVendor.toLowerCase(Locale.ROOT);
         this.isIntel = vendor.contains("intel");
         this.isNvidia = vendor.contains("nvidia");
         this.isAmd = vendor.contains("amd")||vendor.contains("radeon");
@@ -112,6 +134,50 @@ public class Capabilities {
     }
 
     public static void init() {
+    }
+
+    public void writeRenderStackCapabilities(Path output) {
+        try {
+            Files.createDirectories(output.getParent());
+            Files.writeString(output, "{\n"
+                    + "  \"gl_version\": \"" + json(this.glVersion) + "\",\n"
+                    + "  \"gl_vendor\": \"" + json(this.glVendor) + "\",\n"
+                    + "  \"gl_renderer\": \"" + json(this.glRenderer) + "\",\n"
+                    + "  \"gl_major\": " + this.glMajor + ",\n"
+                    + "  \"gl_minor\": " + this.glMinor + ",\n"
+                    + "  \"meets_opengl_46\": " + this.meetsOpenGl46 + ",\n"
+                    + "  \"compute\": " + this.compute + ",\n"
+                    + "  \"indirect_parameters\": " + this.indirectParameters + ",\n"
+                    + "  \"subgroup\": " + this.subgroup + ",\n"
+                    + "  \"sparse_buffer\": " + this.sparseBuffer + ",\n"
+                    + "  \"is_amd\": " + this.isAmd + ",\n"
+                    + "  \"is_nvidia\": " + this.isNvidia + ",\n"
+                    + "  \"is_intel\": " + this.isIntel + ",\n"
+                    + "  \"has_broken_depth_sampler\": " + this.hasBrokenDepthSampler + "\n"
+                    + "}\n", StandardCharsets.UTF_8);
+        } catch (Exception exception) {
+            Logger.warn("Failed to write render_stack_capabilities.json", exception);
+        }
+    }
+
+    private static String safeGlString(int name) {
+        String value = glGetString(name);
+        return value == null ? "unknown" : value;
+    }
+
+    private static int[] parseVersion(String version) {
+        Matcher matcher = GL_VERSION_PATTERN.matcher(version == null ? "" : version);
+        if (!matcher.find()) {
+            return new int[] {0, 0};
+        }
+        return new int[] {
+                Integer.parseInt(matcher.group(1)),
+                Integer.parseInt(matcher.group(2))
+        };
+    }
+
+    private static String json(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static boolean testDepthSampler() {

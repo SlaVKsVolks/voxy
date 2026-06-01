@@ -16,6 +16,8 @@ import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.world.WorldEngine;
 import org.lwjgl.system.MemoryUtil;
@@ -37,6 +39,14 @@ public class HierarchicalOcclusionTraverser {
     public static final boolean HIERARCHICAL_SHADER_DEBUG = System.getProperty("voxy.hierarchicalShaderDebug", "false").equals("true");
 
     public static final int MAX_REQUEST_QUEUE_SIZE = 50;
+    private static final int MIN_VISIBLE_REFINEMENT_REQUEST_BUDGET = Math.max(
+            0,
+            Math.min(MAX_REQUEST_QUEUE_SIZE, Integer.getInteger("voxy.minVisibleRefinementRequestBudget", 6))
+    );
+    private static final int MIN_RENDER_DISTANCE_BLOCKS = Math.max(
+            0,
+            Integer.getInteger("voxy.minRenderDistanceBlocks", 0)
+    );
     public static final int MAX_QUEUE_SIZE = 200_000;
 
 
@@ -110,8 +120,10 @@ public class HierarchicalOcclusionTraverser {
             .define("MAX_ITERATIONS", MAX_ITERATIONS)
             .define("LOCAL_SIZE_BITS", LOCAL_WORK_SIZE_BITS)
             .define("MAX_REQUEST_QUEUE_SIZE", MAX_REQUEST_QUEUE_SIZE)
+            .define("MIN_RENDER_DISTANCE_SQ", MIN_RENDER_DISTANCE_BLOCKS * MIN_RENDER_DISTANCE_BLOCKS)
 
             .define("HIZ_BINDING", 0)
+            .defineIf("VOXY_AMD_HIZ_READ_FILTER", VoxyConfig.CONFIG.amdHizReadSideFilter)
 
             .define("SCENE_UNIFORM_BINDING", SCENE_UNIFORM_BINDING)
             .define("REQUEST_QUEUE_BINDING", REQUEST_QUEUE_BINDING)
@@ -207,7 +219,11 @@ public class HierarchicalOcclusionTraverser {
 
         //MemoryUtil.memPutFloat(ptr, viewport.height); ptr += 4;
 
-        final float screenspaceAreaDecreasingSize = VoxyConfig.CONFIG.subDivisionSize*VoxyConfig.CONFIG.subDivisionSize;
+        // The config value is already expressed as a screen-space area in
+        // pixels squared. Squaring it again makes normal-FOV traversal choose
+        // overly coarse LoDs and spyglass zoom appears to "fix" the result by
+        // inflating projected node area enough to force descent.
+        final float screenspaceAreaDecreasingSize = Math.max(1.0f, VoxyConfig.CONFIG.subDivisionSize);
         //Screen space size for descending
         final float screenSpaceDescendThreshold = (float) (screenspaceAreaDecreasingSize) /(viewport.width*viewport.height);
         MemoryUtil.memPutFloat(ptr, screenSpaceDescendThreshold); ptr += 4;
@@ -226,11 +242,17 @@ public class HierarchicalOcclusionTraverser {
             iFillness = Math.pow(iFillness, 2);
             final int requestSize = (int) Math.ceil(iFillness * MAX_REQUEST_QUEUE_SIZE);
             requestBudget = Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize));
+            if (this.topNodeCount > 0 && MIN_VISIBLE_REFINEMENT_REQUEST_BUDGET > 0) {
+                // Surface LoD generation can keep the mesh queue near its cap for long stretches.
+                // A zero/near-zero traversal request budget then leaves visible parent LoDs stuck
+                // as oversized blocks until the backlog drains. Keep a small refinement lane open.
+                requestBudget = Math.max(requestBudget, MIN_VISIBLE_REFINEMENT_REQUEST_BUDGET);
+            }
             MemoryUtil.memPutInt(ptr, requestBudget);ptr += 4;
         }
 
         //Put the render distance here so that it can generate a correct circle, TODO: make it not top level section sized
-        final float renderDistanceSq = (float) Math.pow(VoxyConfig.CONFIG.sectionRenderDistance*16*32,2);
+        final float renderDistanceSq = (float) Math.pow(VoxyHandoffPolicy.visualTerrainDistanceBlocks(), 2);
         MemoryUtil.memPutFloat(ptr, renderDistanceSq);ptr += 4;
 
         RenderStateDiagnostics.captureTraversal(
@@ -255,6 +277,7 @@ public class HierarchicalOcclusionTraverser {
     }
 
     public void doTraversal(Viewport<?> viewport) {
+        RenderCorrectnessDiagnostics.call("traversal", "doTraversal", "start", "topNodeCount=" + this.topNodeCount + " frameId=" + viewport.frameId);
         this.uploadUniform(viewport);
         //UploadStream.INSTANCE.commit(); //Done inside traversal
 
@@ -275,8 +298,10 @@ public class HierarchicalOcclusionTraverser {
 
         //Traverse
         this.traverseInternal();
+        RenderCorrectnessDiagnostics.call("traversal", "doTraversal", "dispatch_done", "topNodeCount=" + this.topNodeCount + " frameId=" + viewport.frameId);
 
         this.downloadResetRequestQueue();
+        RenderCorrectnessDiagnostics.call("traversal", "doTraversal", "download_done", "topNodeCount=" + this.topNodeCount + " frameId=" + viewport.frameId);
 
         if (RenderStatistics.enabled) {
             DownloadStream.INSTANCE.download(this.statisticsBuffer, down->{
@@ -369,8 +394,10 @@ public class HierarchicalOcclusionTraverser {
 
     private void forwardDownloadResult(long ptr, long size) {
         int count = MemoryUtil.memGetInt(ptr);ptr += 8;//its 8 since we need to skip the second value (which is empty)
+        RenderCorrectnessDiagnostics.call("traversal", "forwardDownloadResult", "downloaded", "count=" + count + " size=" + size);
         if (count < 0 || count > 50000) {
             Logger.error(new IllegalStateException("Count unexpected extreme value: " + count + " things may get weird"));
+            RenderCorrectnessDiagnostics.call("traversal", "forwardDownloadResult", "rejected", "unexpected_count=" + count);
             return;
         }
         if (count > (this.requestBuffer.size()>>3)-1) {
@@ -390,6 +417,7 @@ public class HierarchicalOcclusionTraverser {
             //Write back the exact count into the new memory buffer (not the download stream buffer)
             MemoryUtil.memPutInt(buffer.address, count);
             this.nodeManager.submitRequestBatch(buffer);// the -8 is because we incremented it by 8
+            RenderCorrectnessDiagnostics.call("traversal", "forwardDownloadResult", "submitted_request_batch", "count=" + count);
         }
     }
 

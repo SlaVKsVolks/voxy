@@ -144,7 +144,12 @@ public class ActiveSectionTracker {
                         WorldEngine.getZ(key),
                         this);
 
-                status = this.loader.load(section);
+                try {
+                    status = this.loader.load(section);
+                } catch (Throwable throwable) {
+                    Logger.error("Unable to load section " + section.key + " due to loader exception, setting to air", throwable);
+                    status = 1;
+                }
 
                 if (status < 0) {
                     //TODO: Instead if throwing an exception do something better, like attempting to regen
@@ -227,18 +232,18 @@ public class ActiveSectionTracker {
         WorldSection sec = null;
         final var lock = this.locks[index];
         long stamp = lock.writeLock();
-        boolean shouldRetryExit = false;
+        boolean abortUnload = false;
         {
             VarHandle.loadLoadFence();
             if (this.engine != null && section.shouldSave()) {//Last call for saving
                 if (section.tryAcquire()) {
                     if (!this.engine.saveSection(section, true, true)) {//not allowed to block as we are in a lock
-                        //We didnt enqueue the save here, so we must unload
-                        // but unload in a recursive
+                        // We did not enqueue a save. Drop the temporary save ref and leave
+                        // dirty/no-callback sections live for their owner to flush manually.
                         VarHandle.fullFence();
-                        shouldRetryExit |= section.getRefCount()!=1;//if we arnt the only ref
+                        abortUnload |= section.getRefCount()!=1;//if we arnt the only ref
                         VarHandle.fullFence();
-                        shouldRetryExit |= section.isDirty;//or if the section is now dirty, note this must go AFTER the ref check, since you can only mark live sections as dirty
+                        abortUnload |= section.isDirty;//or if the section is now dirty, note this must go AFTER the ref check, since you can only mark live sections as dirty
                         section.release(false, hints);//Special
                     }
 
@@ -257,10 +262,8 @@ public class ActiveSectionTracker {
             }
 
             //This is a painful case, we need to abort here if there was a funky thing that happened
-            if (shouldRetryExit) {
+            if (abortUnload) {
                 lock.unlockWrite(stamp);
-                //retry
-                this.tryUnload(section, hints);
                 return;
             }
 

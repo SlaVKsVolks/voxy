@@ -655,7 +655,7 @@ public class ModelFactory {
                 uploadResult.biomeUploadIndex = biomeIndex;
                 long clrUploadPtr = (uploadResult.biomeUpload = new MemoryBuffer(4L * this.biomes.size())).address;
                 for (var biome : this.biomes) {
-                    MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, blockState, biome) | 0xFF000000); clrUploadPtr += 4;
+                    MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, blockState, this.resolveBiomeForTint(biome)) | 0xFF000000); clrUploadPtr += 4;
                 }
             }
         }
@@ -794,14 +794,15 @@ public class ModelFactory {
             MemoryUtil.memPutLong(modelUpPtr, Integer.toUnsignedLong(entry.left())|(Integer.toUnsignedLong(biomeIndex)<<32));modelUpPtr+=8;
             long clrUploadPtr = result.biomeColourBuffer.address + biomeIndex * 4L;
             for (var biomeE : this.biomes) {
-                if (biomeE == null) {
-                    continue;//If null, ignore
-                }
-                MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, entry.right(), biomeE)|0xFF000000); clrUploadPtr += 4;
+                MemoryUtil.memPutInt(clrUploadPtr, captureColourConstant(colourProvider, entry.right(), this.resolveBiomeForTint(biomeE))|0xFF000000); clrUploadPtr += 4;
             }
         }
 
         return result;
+    }
+
+    private Biome resolveBiomeForTint(@Nullable Biome biome) {
+        return biome == null ? this.DEFAULT_BIOME : biome;
     }
 
     private static BlockColor getColourProvider(Block block) {
@@ -840,7 +841,14 @@ public class ModelFactory {
 
             @Override
             public int getBlockTint(BlockPos pos, ColorResolver colorResolver) {
-                return colorResolver.getColor(biome, 0, 0);
+                if (biome == null) {
+                    return 0xFFFFFF;
+                }
+                try {
+                    return colorResolver.getColor(biome, 0, 0);
+                } catch (RuntimeException ignored) {
+                    return 0xFFFFFF;
+                }
             }
 
             @Nullable

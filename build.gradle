@@ -98,6 +98,13 @@ neoForge {
             systemProperty 'voxy.neoforgePort', 'true'
             jvmArgument '-Xmx8G'
         }
+        server {
+            server()
+            systemProperty 'voxy.neoforgePort', 'true'
+            systemProperty 'voxy.serverLodVlcp3Path', System.getProperty('voxy.serverLodVlcp3Path', '')
+            systemProperty 'voxy.serverLodVlcp3Dimension', System.getProperty('voxy.serverLodVlcp3Dimension', 'minecraft:overworld')
+            jvmArgument '-Xmx6G'
+        }
     }
 
     mods {
@@ -108,9 +115,9 @@ neoForge {
 }
 
 dependencies {
-    compileOnly files('../../ThirdParty/sodium-source/build/api/sodium-neoforge-0.8.12-beta.3-backport.1+mc1.21.1-api.jar')
-    compileOnly files('../../ThirdParty/sodium-source/neoforge/build/libs/sodium-neoforge-0.8.12-beta.3-backport.1+mc1.21.1-mod.jar')
-    runtimeOnly files('../../ThirdParty/sodium-source/neoforge/build/libs/sodium-neoforge-0.8.12-beta.3-backport.1+mc1.21.1-mod.jar')
+    compileOnly files('../../ThirdParty/sodium-source/build/api/sodium-neoforge-0.8.12-SNAPSHOT+mc1.21.1-local-api.jar')
+    compileOnly files('../../ThirdParty/sodium-source/neoforge/build/libs/sodium-neoforge-0.8.12-SNAPSHOT+mc1.21.1-local-mod.jar')
+    runtimeOnly files('../../ThirdParty/sodium-source/neoforge/build/libs/sodium-neoforge-0.8.12-SNAPSHOT+mc1.21.1-local-mod.jar')
 
     compileOnly files('../../ThirdParty/iris-source/build/libs/iris-neoforge-1.10.7-snapshot+mc1.21.1-local.jar')
     runtimeOnly files('../../ThirdParty/iris-source/build/libs/iris-neoforge-1.10.7-snapshot+mc1.21.1-local.jar')
@@ -123,29 +130,32 @@ dependencies {
     implementation 'org.lwjgl:lwjgl'
     implementation 'org.lwjgl:lwjgl-lmdb'
     implementation 'org.lwjgl:lwjgl-zstd'
+    runtimeOnly 'org.lwjgl:lwjgl:3.3.3'
+    runtimeOnly 'org.lwjgl:lwjgl-zstd:3.3.3'
+    runtimeOnly 'org.rocksdb:rocksdbjni:10.2.1'
     jarJar 'org.lwjgl:lwjgl-lmdb:3.3.3'
     jarJar 'org.lwjgl:lwjgl-zstd:3.3.3'
     runtimeOnly 'org.lwjgl:lwjgl:3.3.3:natives-windows'
     runtimeOnly 'org.lwjgl:lwjgl-lmdb:3.3.3:natives-windows'
     runtimeOnly 'org.lwjgl:lwjgl-zstd:3.3.3:natives-windows'
-    runtimeOnly 'org.lwjgl:lwjgl-lmdb:3.3.3:natives-linux'
-    runtimeOnly 'org.lwjgl:lwjgl-zstd:3.3.3:natives-linux'
     jarJar 'org.lwjgl:lwjgl-lmdb:3.3.3:natives-windows'
     jarJar 'org.lwjgl:lwjgl-zstd:3.3.3:natives-windows'
-    jarJar 'org.lwjgl:lwjgl-lmdb:3.3.3:natives-linux'
-    jarJar 'org.lwjgl:lwjgl-zstd:3.3.3:natives-linux'
 
     implementation 'redis.clients:jedis:5.1.0'
     implementation 'org.rocksdb:rocksdbjni:10.2.1'
     implementation 'org.apache.commons:commons-pool2:2.12.0'
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'org.tukaani:xz:1.10'
+    implementation 'com.github.luben:zstd-jni:1.5.6-6'
     runtimeOnly 'org.xerial:sqlite-jdbc:3.49.1.0'
+    additionalRuntimeClasspath 'com.github.luben:zstd-jni:1.5.6-6'
+    additionalRuntimeClasspath 'org.rocksdb:rocksdbjni:10.2.1'
     jarJar 'redis.clients:jedis:5.1.0'
     jarJar 'org.rocksdb:rocksdbjni:10.2.1'
     jarJar 'org.apache.commons:commons-pool2:2.12.0'
     jarJar 'org.tukaani:xz:1.10'
     jarJar 'org.xerial:sqlite-jdbc:3.49.1.0'
+    jarJar 'com.github.luben:zstd-jni:1.5.6-6'
 }
 
 processResources {
@@ -217,6 +227,48 @@ def rewriteJarJarMetadata = tasks.register('rewriteJarJarMetadata') {
 
 tasks.named('build') {
     dependsOn rewriteJarJarMetadata
+}
+
+tasks.named('test') {
+    failOnNoDiscoveredTests = false
+}
+
+tasks.register('voxyLodCorrectnessProof', JavaExec) {
+    group = 'verification'
+    description = 'Runs the deterministic headless Voxy LoD correctness proof for synthetic worlds and corrupted tiles.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'me.cortex.voxy.client.core.rendering.VoxyLodCorrectnessProof'
+}
+
+tasks.register('voxyHandoffPolicyProof', JavaExec) {
+    group = 'verification'
+    description = 'Runs static and deterministic proofs for merged render distance and server-authored LoD contracts.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'me.cortex.voxy.client.core.rendering.VoxyHandoffPolicyTest'
+}
+
+tasks.register('voxy_lod_correctness_proof') {
+    group = 'verification'
+    description = 'Alias for voxyLodCorrectnessProof.'
+    dependsOn tasks.named('voxyLodCorrectnessProof')
+}
+
+tasks.register('runOfflineLodImport', JavaExec) {
+    group = 'voxy'
+    description = 'Imports a Voxy LoD compiler .vlcp file directly into Voxy storage without launching Minecraft.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'me.cortex.voxy.commonImpl.importers.VoxyLodCompilerOfflineImport'
+    jvmArgs '-Xmx8G', '-Djava.library.path=' + configurations.runtimeClasspath.files.join(File.pathSeparator)
+}
+
+tasks.register('runServerLodCompactSmoke', JavaExec) {
+    group = 'voxy'
+    description = 'Smoke-tests mounting a compact .vlcp file as an on-demand Voxy server LoD source.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'me.cortex.voxy.commonImpl.serverlod.ServerLodCompactSmoke'
+    jvmArgs '-Xmx8G', '-Djava.library.path=' + configurations.runtimeClasspath.files.join(File.pathSeparator)
 }
 
 publishing {

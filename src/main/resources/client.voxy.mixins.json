@@ -2,7 +2,7 @@
   "required": true,
   "package": "me.cortex.voxy.client.mixin",
   "plugin": "me.cortex.voxy.client.mixin.ClientVoxyMixinPlugin",
-  "compatibilityLevel": "JAVA_17",
+  "compatibilityLevel": "JAVA_21",
   "client": [
     "iris.CustomUniformsAccessor",
     "iris.IrisRenderingPipelineAccessor",
@@ -33,9 +33,10 @@
     "sodium.AccessorSodiumWorldRenderer",
     "sodium.MixinChunkJobQueue",
     "sodium.MixinCloudRenderer",
-    // "sodium.MixinDefaultChunkRenderer",
+    "sodium.MixinDefaultChunkRenderer",
     // "sodium.MixinRenderRegionManager",
     "sodium.MixinRenderSectionManager",
+    "sodium.MixinSodiumConfigBuilder",
     "sodium.MixinSodiumWorldRenderer"
   ],
   "injectors": {

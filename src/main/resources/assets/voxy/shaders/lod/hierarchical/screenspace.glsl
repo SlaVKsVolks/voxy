@@ -180,7 +180,7 @@ bool isCulledByHiz() {
             // Guard against invalid/cleared Hi-Z samples being interpreted as
             // near occluders (forward depth path), which can produce black
             // LoD tiles that pop in/out with camera/FOV movement.
-            #ifndef USE_REVERSE_Z
+            #if defined(VOXY_AMD_HIZ_READ_FILTER) && !defined(USE_REVERSE_Z)
             if (sp <= 0.0001f) {
                 sp = FAR;
             }

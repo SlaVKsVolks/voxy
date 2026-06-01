@@ -3,7 +3,7 @@ package me.cortex.voxy.client.core.rendering.hierachical;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntConsumer;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
 import me.cortex.voxy.client.TimingStatistics;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.shader.Shader;
@@ -16,7 +16,9 @@ import me.cortex.voxy.client.core.rendering.section.geometry.BasicAsyncGeometryM
 import me.cortex.voxy.client.core.rendering.section.geometry.BasicSectionGeometryData;
 import me.cortex.voxy.client.core.rendering.section.geometry.IGeometryData;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
+import me.cortex.voxy.client.sodium.provider.VoxyFarTerrainProvider;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.util.AllocationArena;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.UnsafeUtil;
@@ -28,10 +30,14 @@ import org.lwjgl.system.MemoryUtil;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.StampedLock;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.lwjgl.opengl.ARBUniformBufferObject.glBindBufferBase;
 import static org.lwjgl.opengl.GL30C.glUniform1ui;
@@ -70,6 +76,7 @@ public class AsyncNodeManager {
     private final BasicAsyncGeometryManager geometryManager;
     private final IGeometryData geometryData;
     private final SectionUpdateRouter router;
+    private final RenderGenerationService renderService;
 
     private final GeometryCache geometryCache = new GeometryCache(1L<<32);
 
@@ -86,7 +93,8 @@ public class AsyncNodeManager {
 
     private boolean needsWaitForSync = false;
 
-    public AsyncNodeManager(int maxNodeCount, IGeometryData geometryData, RenderGenerationService renderService) {
+    public AsyncNodeManager(int maxNodeCount, IGeometryData geometryData, RenderGenerationService renderService, VoxyFarTerrainProvider farTerrainProvider) {
+        this.renderService = renderService;
         //Note the current implmentation of ISectionWatcher is threadsafe
         //Note: geometry data is the data store/source, not the management, it is just a raw store of data
         // it MUST ONLY be accessed on the render thread
@@ -118,17 +126,20 @@ public class AsyncNodeManager {
         this.geometryManager = new BasicAsyncGeometryManager(((BasicSectionGeometryData)geometryData).getMaxSectionCount(), this.geometryCapacity);
 
         this.router = new SectionUpdateRouter();
+        this.manager = new NodeManager(maxNodeCount, this.geometryManager, this.router, farTerrainProvider);
+        renderService.setRequestEpochProvider(this.manager::currentGeometryRequestEpoch);
+        renderService.setFarTerrainProvider(farTerrainProvider);
         this.router.setCallbacks(pos->{//On initial render gen, try get from geometry cache
             var cachedGeometry = this.geometryCache.remove(pos);
             if (cachedGeometry != null) {//Use the cached geometry
-                this.submitGeometryResult(cachedGeometry);
+                this.submitGeometryResult(cachedGeometry.withRequestEpoch(this.manager.currentGeometryRequestEpoch(pos)));
             } else {//Else we need to request it
                 renderService.enqueueTask(pos);
             }
-        }, renderService::enqueueTask, this::submitChildChange);
+        }, pos -> {
+            this.submitWatchedGeometryRequest(pos);
+        }, this::submitChildChange);
         renderService.setResultConsumer(this::submitGeometryResult);
-
-        this.manager = new NodeManager(maxNodeCount, this.geometryManager, this.router);
 
         //Dont do the move... is just to much effort
         this.manager.setClear(new NodeManager.ICleaner() {
@@ -192,6 +203,13 @@ public class AsyncNodeManager {
             .compile();
 
     private void run() {
+        RenderCorrectnessDiagnostics.call("async_node_manager", "run", "start",
+                "workCounter=" + this.workCounter.get()
+                        + " requestQueue=" + this.requestBatchQueue.size()
+                        + " childQueue=" + this.childUpdateQueue.size()
+                        + " geometryQueue=" + this.geometryUpdateQueue.size()
+                        + " diagnosticsQueue=" + this.geometryCoverageDiagnosticsQueue.size()
+                        + " providerCoverageRefreshQueue=" + this.providerCoverageRefreshQueue.size());
         if (this.workCounter.get() <= 0) {
             //TODO: here, instead of parking, we can do more work on other sub-tasks such as filtering the mesh build queue
             LockSupport.park();
@@ -212,18 +230,26 @@ public class AsyncNodeManager {
 
 
         int workDone = 0;
+        int topLevelWorkDone = 0;
+        int childWorkDone = 0;
+        int watchedGeometryRequestWorkDone = 0;
+        int geometryCoverageDiagnosticsWorkDone = 0;
+        int providerCoverageRefreshWorkDone = 0;
+        int geometryWorkDone = 0;
+        int requestBatchWorkDone = 0;
+        int removeBatchWorkDone = 0;
 
         {
-            LongOpenHashSet add = null;
-            LongOpenHashSet rem = null;
+            LongLinkedOpenHashSet add = null;
+            LongLinkedOpenHashSet rem = null;
             long stamp = this.tlnLock.writeLock();
 
             if (!this.tlnAdd.isEmpty()) {
-                add = new LongOpenHashSet(this.tlnAdd);
+                add = new LongLinkedOpenHashSet(this.tlnAdd);
                 this.tlnAdd.clear();
             }
             if (!this.tlnRem.isEmpty()) {
-                rem = new LongOpenHashSet(this.tlnRem);
+                rem = new LongLinkedOpenHashSet(this.tlnRem);
                 this.tlnRem.clear();
             }
 
@@ -246,6 +272,7 @@ public class AsyncNodeManager {
             }
 
             workDone += work;
+            topLevelWorkDone = work;
         }
 
         do {
@@ -253,8 +280,28 @@ public class AsyncNodeManager {
             if (job == null)
                 break;
             workDone++;
+            childWorkDone++;
             this.manager.processChildChange(job.key, job.getNonEmptyChildren());
             job.release();
+        } while (true);
+
+        do {
+            var job = this.watchedGeometryRequestQueue.poll();
+            if (job == null)
+                break;
+            workDone++;
+            watchedGeometryRequestWorkDone++;
+            this.manager.beginWatchedGeometryUpdate(job, "section_update_router_geometry");
+            this.renderService.enqueueTask(job);
+        } while (true);
+
+        do {
+            var job = this.geometryCoverageDiagnosticsQueue.poll();
+            if (job == null)
+                break;
+            workDone++;
+            geometryCoverageDiagnosticsWorkDone++;
+            this.manager.emitGeometryCoverageDiagnostics(job.frameId, job.reason);
         } while (true);
 
 
@@ -268,6 +315,7 @@ public class AsyncNodeManager {
             if (job == null)
                 break;
             workDone++;
+            geometryWorkDone++;
             this.manager.processGeometryResult(job);
             if (job.geometryBuffer!=null) {
                 estimatedGeometryUploadAmount += job.geometryBuffer.size;
@@ -279,6 +327,7 @@ public class AsyncNodeManager {
             if (job == null)
                 break;
             workDone++;
+            requestBatchWorkDone++;
             long ptr = job.address;
             int count = MemoryUtil.memGetInt(ptr);
             ptr += 8;//Its 8 to keep alignment
@@ -299,6 +348,7 @@ public class AsyncNodeManager {
             if (job == null)
                 break;
             workDone++;
+            removeBatchWorkDone++;
             long ptr = job.address;
             int zeroCount = 0;
             for (int i = 0; i < NodeCleaner.OUTPUT_COUNT; i++) {
@@ -320,6 +370,20 @@ public class AsyncNodeManager {
             job.free();
         } while (true);
 
+        do {
+            var job = this.providerCoverageRefreshQueue.poll();
+            if (job == null) {
+                break;
+            }
+            workDone++;
+            providerCoverageRefreshWorkDone++;
+            try {
+                job.result.complete(this.manager.refreshProviderCoverageFromActiveNodes(job.reason));
+            } catch (Throwable throwable) {
+                job.result.completeExceptionally(throwable);
+            }
+        } while (true);
+
         if (this.workCounter.addAndGet(-workDone) < 0) {
             try {
                 Thread.sleep(1000);
@@ -335,8 +399,19 @@ public class AsyncNodeManager {
 
         if (workDone == 0) {//Nothing happened, which is odd, but just return
             //Should probably log that nothing happened, at least once
+            RenderCorrectnessDiagnostics.call("async_node_manager", "run", "no_work", "workCounter=" + this.workCounter.get());
             return;
         }
+        RenderCorrectnessDiagnostics.call("async_node_manager", "run", "processed",
+                "workDone=" + workDone
+                        + " topLevel=" + topLevelWorkDone
+                        + " child=" + childWorkDone
+                        + " watchedGeometry=" + watchedGeometryRequestWorkDone
+                        + " geometryCoverageDiagnostics=" + geometryCoverageDiagnosticsWorkDone
+                        + " providerCoverageRefresh=" + providerCoverageRefreshWorkDone
+                        + " geometry=" + geometryWorkDone
+                        + " requestBatch=" + requestBatchWorkDone
+                        + " removeBatch=" + removeBatchWorkDone);
         //=====================
         //process output events and atomically sync to results
 
@@ -494,6 +569,13 @@ public class AsyncNodeManager {
         results.geometrySectionCount = this.geometryManager.getSectionCount();
         results.usedGeometry = this.geometryManager.getGeometryUsedBytes();
         results.currentMaxNodeId = this.manager.getCurrentMaxNodeId();
+        RenderCorrectnessDiagnostics.call("async_node_manager", "run", "published",
+                "geometrySections=" + results.geometrySectionCount
+                        + " usedGeometry=" + results.usedGeometry
+                        + " currentMaxNodeId=" + results.currentMaxNodeId
+                        + " scatterWrites=" + results.scatterWriteLocationMap.size()
+                        + " tlnDelta=" + results.tlnDelta.size()
+                        + " cleanerOps=" + results.cleanerOperations.size());
 
         this.needsWaitForSync |= results.geometryUpload.currentElemCopyAmount*8L > 2L<<20;//2mb limit per frame
         this.needsWaitForSync |= results.cleanerOperations.size() > 1024;
@@ -517,8 +599,15 @@ public class AsyncNodeManager {
         }
         var results = (SyncResults)RESULT_HANDLE.getAndSet(this, null);//Acquire the results
         if (results == null) {//There are no new results to process, return
+            RenderCorrectnessDiagnostics.call("async_node_manager", "tick", "no_results", "");
             return;
         }
+        RenderCorrectnessDiagnostics.call("async_node_manager", "tick", "sync_start",
+                "geometrySections=" + results.geometrySectionCount
+                        + " uploads=" + results.geometryUpload.dataUploadPoints.size()
+                        + " scatterWrites=" + results.scatterWriteLocationMap.size()
+                        + " cleanerOps=" + results.cleanerOperations.size()
+                        + " tlnDelta=" + results.tlnDelta.size());
 
         //top level node add/remove
         if (!results.tlnDelta.isEmpty()) {
@@ -598,6 +687,8 @@ public class AsyncNodeManager {
 
         this.currentMaxNodeId = results.currentMaxNodeId;
         this.usedGeometryAmount = results.usedGeometry;
+        RenderCorrectnessDiagnostics.call("async_node_manager", "tick", "sync_done",
+                "currentMaxNodeId=" + this.currentMaxNodeId + " usedGeometry=" + this.usedGeometryAmount);
 
         //Insert the result set into the cache
         if (!RESULT_CACHE_1_HANDLE.compareAndSet(this, null, results)) {
@@ -619,6 +710,73 @@ public class AsyncNodeManager {
         return this.currentMaxNodeId;
     }
 
+    public int getManagedActiveSectionCount() {
+        return this.manager.getActiveSectionMapSize();
+    }
+
+    public void emitGeometryCoverageDiagnostics(long frameId, String reason) {
+        if (!this.running) {
+            return;
+        }
+        this.geometryCoverageDiagnosticsQueue.add(new GeometryCoverageDiagnosticsRequest(frameId, reason));
+        this.addWork();
+    }
+
+    public boolean refreshProviderCoverageNow(String reason, long timeoutMillis) {
+        if (!this.running) {
+            return false;
+        }
+        ProviderCoverageRefreshRequest request = new ProviderCoverageRefreshRequest(reason);
+        this.providerCoverageRefreshQueue.add(request);
+        this.addWork();
+        try {
+            request.result.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException | TimeoutException exception) {
+            RenderCorrectnessDiagnostics.call(
+                    "async_node_manager",
+                    "refreshProviderCoverageNow",
+                    "failed",
+                    exception.getClass().getSimpleName() + ":" + exception.getMessage());
+            return false;
+        }
+    }
+
+    public int getManagedTopLevelNodeCount() {
+        return this.manager.getTopLevelNodeCount();
+    }
+
+    public int getCommittedTopLevelNodeIdCount() {
+        return this.manager.getCommittedTopLevelNodeIdCount();
+    }
+
+    public int getActiveNodeRequestCount() {
+        return this.manager.getActiveNodeRequestCount();
+    }
+
+    public int getMissingActiveChildChangeCount() {
+        return this.manager.getMissingActiveChildChangeCount();
+    }
+
+    public int getInnerNodeZeroChildExistenceCount() {
+        return this.manager.getInnerNodeZeroChildExistenceCount();
+    }
+
+    public int getDeferredInnerNodeZeroChildCollapseCount() {
+        return this.manager.getDeferredInnerNodeZeroChildCollapseCount();
+    }
+
+    public int getZeroChildLeafRequestSkipCount() {
+        return this.manager.getZeroChildLeafRequestSkipCount();
+    }
+
+    public int getRenderedGeometrySectionCount() {
+        return this.geometryData.getSectionCount();
+    }
+
     private long usedGeometryAmount = 0;
     public long getUsedGeometryCapacity() {
         return this.usedGeometryAmount;
@@ -635,13 +793,35 @@ public class AsyncNodeManager {
     //TODO: add atomic counters for each event type probably
     private final ConcurrentLinkedDeque<MemoryBuffer> requestBatchQueue = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<WorldSection> childUpdateQueue = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<Long> watchedGeometryRequestQueue = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<GeometryCoverageDiagnosticsRequest> geometryCoverageDiagnosticsQueue = new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<ProviderCoverageRefreshRequest> providerCoverageRefreshQueue = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<BuiltSection> geometryUpdateQueue = new ConcurrentLinkedDeque<>();
 
     private final ConcurrentLinkedDeque<MemoryBuffer> removeBatchQueue = new ConcurrentLinkedDeque<>();
 
     private final StampedLock tlnLock = new StampedLock();
-    private final LongOpenHashSet tlnAdd = new LongOpenHashSet();
-    private final LongOpenHashSet tlnRem = new LongOpenHashSet();
+    private final LongLinkedOpenHashSet tlnAdd = new LongLinkedOpenHashSet();
+    private final LongLinkedOpenHashSet tlnRem = new LongLinkedOpenHashSet();
+
+    private static final class GeometryCoverageDiagnosticsRequest {
+        final long frameId;
+        final String reason;
+
+        GeometryCoverageDiagnosticsRequest(long frameId, String reason) {
+            this.frameId = frameId;
+            this.reason = reason;
+        }
+    }
+
+    private static final class ProviderCoverageRefreshRequest {
+        final String reason;
+        final CompletableFuture<Integer> result = new CompletableFuture<>();
+
+        ProviderCoverageRefreshRequest(String reason) {
+            this.reason = reason;
+        }
+    }
 
     private void addWork() {
         if (!this.running) {
@@ -656,6 +836,8 @@ public class AsyncNodeManager {
     }
 
     public void submitRequestBatch(MemoryBuffer batch) {//Only called from render thread
+        int count = batch.size >= 4 ? MemoryUtil.memGetInt(batch.address) : -1;
+        RenderCorrectnessDiagnostics.call("async_node_manager", "submitRequestBatch", "queued", "count=" + count + " bytes=" + batch.size);
         this.requestBatchQueue.add(batch);
         this.addWork();
     }
@@ -664,8 +846,18 @@ public class AsyncNodeManager {
         if (!this.running) {
             return;
         }
+        RenderCorrectnessDiagnostics.call("async_node_manager", "submitChildChange", "queued", "pos=" + section.key);
         section.acquire();//We must acquire the section before putting in the queue
         this.childUpdateQueue.add(section);
+        this.addWork();
+    }
+
+    private void submitWatchedGeometryRequest(long position) {
+        if (!this.running) {
+            return;
+        }
+        RenderCorrectnessDiagnostics.call("async_node_manager", "submitWatchedGeometryRequest", "queued", "pos=" + position);
+        this.watchedGeometryRequestQueue.add(position);
         this.addWork();
     }
 
@@ -674,17 +866,21 @@ public class AsyncNodeManager {
             geometry.free();
             return;
         }
+        RenderCorrectnessDiagnostics.call("async_node_manager", "submitGeometryResult", "queued",
+                "pos=" + geometry.position + " empty=" + geometry.isEmpty());
         this.geometryUpdateQueue.add(geometry);
         this.addWork();
     }
 
     public void submitRemoveBatch(MemoryBuffer batch) {//Only called from render thread
+        RenderCorrectnessDiagnostics.call("async_node_manager", "submitRemoveBatch", "queued", "bytes=" + batch.size);
         this.removeBatchQueue.add(batch);
         this.addWork();
     }
 
     public void addTopLevel(long section) {//Only called from render thread
         if (!this.running) throw new IllegalStateException("Not running");
+        RenderCorrectnessDiagnostics.call("async_node_manager", "addTopLevel", "queued", "pos=" + section);
         long stamp = this.tlnLock.writeLock();
         int state = 0;
         if (!this.tlnRem.remove(section)) {
@@ -702,6 +898,7 @@ public class AsyncNodeManager {
 
     public void removeTopLevel(long section) {//Only called from render thread
         if (!this.running) throw new IllegalStateException("Not running");
+        RenderCorrectnessDiagnostics.call("async_node_manager", "removeTopLevel", "queued", "pos=" + section);
         long stamp = this.tlnLock.writeLock();
         int state = 0;
         if (!this.tlnAdd.remove(section)) {

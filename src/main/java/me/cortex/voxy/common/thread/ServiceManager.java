@@ -63,6 +63,10 @@ public class ServiceManager {
         return this.runAJob0();
     }
 
+    public int getTotalJobs() {
+        return this.totalJobs.get();
+    }
+
     private int runAJob0() {//Executes a single job on the current thread
         if (this.services.length == 0) return 1;
         var ctx = this.accelerationContext.get();

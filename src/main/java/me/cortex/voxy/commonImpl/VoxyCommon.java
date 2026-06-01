@@ -8,7 +8,7 @@ import net.neoforged.fml.loading.FMLLoader;
 public class VoxyCommon {
     public static final String MOD_ID = "voxy";
     public static final String MOD_VERSION = resolveVersion();
-    public static final boolean IS_DEDICATED_SERVER = FMLLoader.getDist().isDedicatedServer();
+    public static final boolean IS_DEDICATED_SERVER = FMLLoader.getDist() != null && FMLLoader.getDist().isDedicatedServer();
     public static final boolean IS_IN_MINECRAFT = NeoForgeModStatus.isLoaded(MOD_ID);
     private static boolean initialized;
 

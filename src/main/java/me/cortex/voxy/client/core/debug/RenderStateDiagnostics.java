@@ -18,6 +18,7 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Lightweight render-state snapshot logger for FOV/zoom instability diagnosis.
@@ -42,9 +43,14 @@ public final class RenderStateDiagnostics {
             System.getProperty("voxy.renderstateDiagnosticsDir", "debug/voxy_renderstate")
     );
     private static final Path OUTPUT_FILE = OUTPUT_DIR.resolve("voxy_renderstate.ndjson");
+    private static final long MAX_LINES = Long.getLong("voxy.renderstateDiagnosticsMaxLines", 20_000L);
+    private static final long MAX_BYTES = Long.getLong("voxy.renderstateDiagnosticsMaxBytes", 64L * 1024L * 1024L);
 
     private static final AtomicBoolean initLogged = new AtomicBoolean(false);
     private static final AtomicBoolean ioFailureLogged = new AtomicBoolean(false);
+    private static final AtomicBoolean limitLogged = new AtomicBoolean(false);
+    private static final AtomicLong linesWritten = new AtomicLong(0L);
+    private static final AtomicLong bytesWritten = new AtomicLong(-1L);
 
     private static volatile long lastWriteMs = 0L;
     private static volatile long lastStateHash = Long.MIN_VALUE;
@@ -293,6 +299,26 @@ public final class RenderStateDiagnostics {
         sb.append(',');
         appendKv(sb, "configured_section_render_distance", snapshot.sectionRenderDistance());
         sb.append(',');
+        appendKv(sb, "visual_terrain_distance_blocks", snapshot.visualTerrainDistanceBlocks());
+        sb.append(',');
+        appendKv(sb, "real_chunk_radius_chunks", snapshot.realChunkRadiusChunks());
+        sb.append(',');
+        appendKv(sb, "handoff_start_chunks", snapshot.handoffStartChunks());
+        sb.append(',');
+        appendKv(sb, "lod_end_chunks", snapshot.lodEndChunks());
+        sb.append(',');
+        appendKv(sb, "terrain_pass", snapshot.terrainPass());
+        sb.append(',');
+        appendKv(sb, "sodium_chunk_rendering_enabled", snapshot.sodiumChunkRenderingEnabled());
+        sb.append(',');
+        appendKv(sb, "iris_shaderpack_enabled", snapshot.irisShaderPackEnabled());
+        sb.append(',');
+        appendKv(sb, "depth_target_identity", snapshot.depthTargetIdentity());
+        sb.append(',');
+        appendKv(sb, "fog_start", snapshot.fogStart());
+        sb.append(',');
+        appendKv(sb, "fog_end", snapshot.fogEnd());
+        sb.append(',');
         appendKv(sb, "approx_voxy_fov_y_deg", approxFovYDegrees(snapshot.projection()));
         sb.append('}');
 
@@ -407,9 +433,30 @@ public final class RenderStateDiagnostics {
                 .replace("\t", "\\t");
     }
 
-    private static void writeLine(String line) {
+    private static synchronized void writeLine(String line) {
         try {
             Files.createDirectories(OUTPUT_DIR);
+            long currentBytes = bytesWritten.get();
+            if (currentBytes < 0L) {
+                currentBytes = Files.exists(OUTPUT_FILE) ? Files.size(OUTPUT_FILE) : 0L;
+                bytesWritten.set(currentBytes);
+            }
+            long currentLines = linesWritten.get();
+            long lineBytes = line.getBytes(StandardCharsets.UTF_8).length + System.lineSeparator().getBytes(StandardCharsets.UTF_8).length;
+            if ((MAX_LINES > 0L && currentLines >= MAX_LINES)
+                    || (MAX_BYTES > 0L && currentBytes + lineBytes > MAX_BYTES)) {
+                if (limitLogged.compareAndSet(false, true)) {
+                    me.cortex.voxy.common.Logger.info(
+                            "RenderStateDiagnostics output limit reached. lines=",
+                            Long.toString(currentLines),
+                            " bytes=",
+                            Long.toString(currentBytes),
+                            " file=",
+                            OUTPUT_FILE.toAbsolutePath().toString()
+                    );
+                }
+                return;
+            }
             Files.writeString(
                     OUTPUT_FILE,
                     line + System.lineSeparator(),
@@ -418,6 +465,8 @@ public final class RenderStateDiagnostics {
                     StandardOpenOption.WRITE,
                     StandardOpenOption.APPEND
             );
+            linesWritten.incrementAndGet();
+            bytesWritten.addAndGet(lineBytes);
             if (initLogged.compareAndSet(false, true)) {
                 me.cortex.voxy.common.Logger.info("RenderStateDiagnostics active. Output=", OUTPUT_FILE.toAbsolutePath().toString());
             }

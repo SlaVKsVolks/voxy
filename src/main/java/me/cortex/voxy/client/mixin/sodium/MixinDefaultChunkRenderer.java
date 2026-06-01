@@ -2,15 +2,13 @@ package me.cortex.voxy.client.mixin.sodium;
 
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
-import me.cortex.voxy.client.core.rendering.Viewport;
-import me.cortex.voxy.client.core.util.IrisUtil;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainPass;
 import net.caffeinemc.mods.sodium.client.gl.device.CommandList;
 import net.caffeinemc.mods.sodium.client.gl.device.RenderDevice;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
 import net.caffeinemc.mods.sodium.client.render.chunk.DefaultChunkRenderer;
 import net.caffeinemc.mods.sodium.client.render.chunk.ShaderChunkRenderer;
 import net.caffeinemc.mods.sodium.client.render.chunk.lists.ChunkRenderListIterable;
-import net.caffeinemc.mods.sodium.client.render.chunk.terrain.DefaultTerrainRenderPasses;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.ChunkVertexType;
 import net.caffeinemc.mods.sodium.client.render.viewport.CameraTransform;
@@ -32,30 +30,22 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
     private void cancelThingie(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci) {
         if (VoxyClient.disableSodiumChunkRender()) {
             super.begin(renderPass);
-            this.doRender(matrices, renderPass, camera);
             super.end(renderPass);
+            this.doRender(matrices, renderPass, camera);
             ci.cancel();
         }
     }
 
-    @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/ShaderChunkRenderer;end(Lnet/caffeinemc/mods/sodium/client/render/chunk/terrain/TerrainRenderPass;)V", shift = At.Shift.BEFORE))
+    @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/render/chunk/ShaderChunkRenderer;end(Lnet/caffeinemc/mods/sodium/client/render/chunk/terrain/TerrainRenderPass;)V", shift = At.Shift.AFTER))
     private void injectRender(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, boolean indexedRenderingEnabled, CallbackInfo ci) {
         this.doRender(matrices, renderPass, camera);
     }
 
     @Unique
     private void doRender(ChunkRenderMatrices matrices, TerrainRenderPass renderPass, CameraTransform camera) {
-        if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
-            var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).voxy$getRenderSystem();
-            if (renderer != null) {
-                Viewport<?> viewport = null;
-                if (IrisUtil.irisShaderPackEnabled()) {
-                    viewport = renderer.getViewport();
-                } else {
-                    viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), camera.x, camera.y, camera.z);
-                }
-                renderer.renderOpaque(viewport);
-            }
+        var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).voxy$getRenderSystem();
+        if (renderer != null) {
+            renderer.renderSodiumProviderPass(VoxyTerrainPass.fromSodium(renderPass), matrices, camera.x, camera.y, camera.z);
         }
     }
 }

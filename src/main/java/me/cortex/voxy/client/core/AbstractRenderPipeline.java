@@ -13,6 +13,7 @@ import me.cortex.voxy.client.core.rendering.section.backend.AbstractSectionRende
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
 import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderList;
 import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.util.TrackedObject;
 import org.joml.Matrix4f;
@@ -87,6 +88,24 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         this.sectionRenderer = sectionRenderer;
     }
 
+    public void setProviderRenderList(VoxyProviderRenderList renderList) {
+        if (this.sectionRenderer != null) {
+            this.sectionRenderer.setProviderRenderList(renderList);
+        }
+    }
+
+    public void clearProviderRenderList() {
+        if (this.sectionRenderer != null) {
+            this.sectionRenderer.clearProviderRenderList();
+        }
+    }
+
+    public void setProviderRenderListStaleSkipCallback(Runnable callback) {
+        if (this.sectionRenderer != null) {
+            this.sectionRenderer.setProviderRenderListStaleSkipCallback(callback);
+        }
+    }
+
     //Called before the pipeline starts running, used to update uniforms etc
     public void preSetup(Viewport<?> viewport) {
 
@@ -100,8 +119,11 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     }
 
     public void runPipeline(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "start",
+                "sourceFb=" + sourceFrameBuffer + " src=" + srcWidth + "x" + srcHeight);
         int depthTexture = this.setup(viewport, sourceFrameBuffer, srcWidth, srcHeight);
         if (depthTexture == 0) {
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "skip", "depthTexture_zero");
             glDisable(GL_STENCIL_TEST);
             glDisable(GL_DEPTH_TEST);
             glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
@@ -110,35 +132,73 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
         var rs = ((AbstractSectionRenderer)this.sectionRenderer);
         GPUTiming.INSTANCE.marker("RO");
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_opaque_start", rs.getClass().getSimpleName());
         rs.renderOpaque(viewport);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_opaque_done", rs.getClass().getSimpleName());
         var occlusionDebug = VoxyClient.getOcclusionDebugState();
         if (occlusionDebug==0) {
             GPUTiming.INSTANCE.marker("I");
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "inner_primary_work_start", "depthTexture=" + depthTexture);
             this.innerPrimaryWork(viewport, depthTexture);
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "inner_primary_work_done", "depthTexture=" + depthTexture);
             GPUTiming.INSTANCE.marker();
         }
 
         if (occlusionDebug<=1) {
             TimingStatistics.G.start();
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "build_draw_calls_start", rs.getClass().getSimpleName());
             rs.buildDrawCalls(viewport);
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "build_draw_calls_done", rs.getClass().getSimpleName());
             TimingStatistics.G.stop();
         }
 
         GPUTiming.INSTANCE.marker("TP");
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_temporal_start", rs.getClass().getSimpleName());
         rs.renderTemporal(viewport);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_temporal_done", rs.getClass().getSimpleName());
 
         rs.postOpaquePreperation(viewport);
 
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "post_opaque_pre_translucent_start", "");
         this.postOpaquePreTranslucent(viewport, sourceFrameBuffer);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "post_opaque_pre_translucent_done", "");
         GPUTiming.INSTANCE.marker("RT");
 
         if (!this.deferTranslucency) {
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_translucent_start", rs.getClass().getSimpleName());
             rs.renderTranslucent(viewport);
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_translucent_done", rs.getClass().getSimpleName());
+        } else {
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "render_translucent_deferred", rs.getClass().getSimpleName());
         }
         GPUTiming.INSTANCE.marker();
 
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "finish_start", "");
+        this.finish(viewport, sourceFrameBuffer, srcWidth, srcHeight);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".runPipeline", "finish_done", "");
+        glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
+    }
+
+    public void prepareProviderTraversal(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".prepareProviderTraversal", "start",
+                "sourceFb=" + sourceFrameBuffer + " src=" + srcWidth + "x" + srcHeight);
+        int depthTexture = this.setup(viewport, sourceFrameBuffer, srcWidth, srcHeight);
+        if (depthTexture == 0) {
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".prepareProviderTraversal", "skip", "depthTexture_zero");
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_DEPTH_TEST);
+            glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
+            return;
+        }
+        TimingStatistics.main.start();
+        try {
+            this.innerPrimaryWork(viewport, depthTexture);
+        } finally {
+            TimingStatistics.main.stop();
+        }
         this.finish(viewport, sourceFrameBuffer, srcWidth, srcHeight);
         glBindFramebuffer(GL_FRAMEBUFFER, sourceFrameBuffer);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".prepareProviderTraversal", "done", "");
     }
 
     protected boolean initDepthStencil(int sourceFrameBuffer, int targetFb, int srcWidth, int srcHeight, int width, int height) {
@@ -185,6 +245,14 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
 
     private static final long SCRATCH = MemoryUtil.nmemAlloc(4*4*4);
     protected static boolean transformBlitDepth(FullscreenBlit blitShader, int srcDepthTex, int dstFB, Viewport<?> viewport, Matrix4f targetTransform) {
+        return transformBlitDepth(blitShader, srcDepthTex, dstFB, viewport, targetTransform, false);
+    }
+
+    protected static boolean transformBlitDepth(FullscreenBlit blitShader, int srcDepthTex, int dstFB, Viewport<?> viewport, Matrix4f targetTransform, boolean writeColor) {
+        return transformBlitDepth(blitShader, srcDepthTex, dstFB, viewport, targetTransform, writeColor, GL_ALWAYS);
+    }
+
+    protected static boolean transformBlitDepth(FullscreenBlit blitShader, int srcDepthTex, int dstFB, Viewport<?> viewport, Matrix4f targetTransform, boolean writeColor, int depthFunc) {
         if (srcDepthTex == 0 || dstFB == 0 || viewport == null || viewport.width <= 0 || viewport.height <= 0) {
             RenderCorrectnessDiagnostics.depthGuard("transformBlitDepth", "invalid_blit_inputs", dstFB, srcDepthTex, viewport == null ? 0 : viewport.width, viewport == null ? 0 : viewport.height);
             return false;
@@ -207,9 +275,13 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         nglUniformMatrix4fv(2, 1, false, SCRATCH);//tooProjection
 
         glEnable(GL_DEPTH_TEST);
+        glDepthFunc(depthFunc);
+        glDepthMask(true);
+        glColorMask(writeColor, writeColor, writeColor, writeColor);
         blitShader.blit();
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_DEPTH_TEST);
+        glColorMask(true, true, true, true);
         return true;
     }
 
@@ -234,7 +306,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     protected void innerPrimaryWork(Viewport<?> viewport, int depthBuffer) {
 
         //Compute the mip chain
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "hiz_start", "depthBuffer=" + depthBuffer);
         viewport.hiZBuffer.buildMipChain(depthBuffer, viewport.width, viewport.height);
+        RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "hiz_done", "depthBuffer=" + depthBuffer);
 
         do {
             TimingStatistics.main.stop();
@@ -245,10 +319,14 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
             DownloadStream.INSTANCE.tick();
             TimingStatistics.D.stop();
 
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "node_tick_start", "");
             this.nodeManager.tick(this.traversal.getNodeBuffer(), this.nodeCleaner);
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "node_tick_done", "");
             //glFlush();
 
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "cleaner_tick_start", "");
             this.nodeCleaner.tick(this.traversal.getNodeBuffer());//Probably do this here??
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "cleaner_tick_done", "");
 
             TimingStatistics.dynamic.stop();
             TimingStatistics.main.start();
@@ -256,7 +334,9 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
             glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT | GL_PIXEL_BUFFER_BARRIER_BIT);
 
             TimingStatistics.F.start();
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "traversal_start", "");
             this.traversal.doTraversal(viewport);
+            RenderCorrectnessDiagnostics.call("render_pipeline", this.getClass().getSimpleName() + ".innerPrimaryWork", "traversal_done", "");
             TimingStatistics.F.stop();
         } while (this.frexStillHasWork.getAsBoolean());
     }

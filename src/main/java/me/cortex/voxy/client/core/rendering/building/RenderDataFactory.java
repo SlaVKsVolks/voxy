@@ -4,9 +4,13 @@ import me.cortex.voxy.client.core.model.IdNotYetComputedException;
 import me.cortex.voxy.client.core.model.ModelFactory;
 import me.cortex.voxy.client.core.model.ModelQueries;
 import me.cortex.voxy.client.core.util.ScanMesher2D;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainFailureReason;
+import me.cortex.voxy.client.sodium.provider.VoxyRuntimeMeshValidator;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainTileValidator;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.UnsafeUtil;
+import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldSection;
 import me.cortex.voxy.common.world.other.Mapper;
@@ -21,6 +25,9 @@ public class RenderDataFactory {
 
     private static final boolean CHECK_NEIGHBOR_FACE_OCCLUSION = true;
     private static final boolean DISABLE_CULL_SAME_OCCLUDES = false;//TODO: FIX TRANSLUCENTS (e.g. stained glass) breaking on chunk boarders with this set to false (it might be something else????)
+    private static final boolean SURFACE_PREVIEW_TOP_FACES_ONLY = Boolean.parseBoolean(
+            System.getProperty("voxy.surfacePreviewTopFacesOnly", "false")
+    );
 
     private static final boolean VERIFY_MESHING = VoxyCommon.isVerificationFlagOn("verifyMeshing");
 
@@ -38,6 +45,7 @@ public class RenderDataFactory {
     //private final long[] sectionData = new long[32*32*32*2];
     private final long[] sectionData = new long[32*32*32*2];
     private final long[] neighboringFaces = new long[32*32*6];
+    private final boolean[] neighboringFaceKnown = new boolean[6];
     //private final int[] neighboringOpaqueMasks = new int[32*6];
 
     private final int[] opaqueMasks = new int[32*32];
@@ -61,6 +69,8 @@ public class RenderDataFactory {
     private int maxZ;
 
     private int quadCount = 0;
+    private boolean surfacePreviewTopFacesOnly;
+    private VoxyTerrainFailureReason lastProviderValidationFailure = VoxyTerrainFailureReason.NONE;
 
     private final OccupancySet occupancy;
 
@@ -205,7 +215,6 @@ public class RenderDataFactory {
         //This uses hardcoded data to shuffle things
         long lightAndBiome =  (state&((0x1FFL<<47)|(0xFFL<<56)))>>>1;
         lightAndBiome &= ~(ModelQueries._notIsBiomeColoured(metadata) * (0x1FFL << 46));//46 not 47 because is already shifted by 1 THIS WASTED 4 HOURS ;-; aaaaaAAAAAA
-        lightAndBiome &= ~(ModelQueries._isFullyOpaque(metadata)*(0xFFL << 55));//If its fully opaque it always uses neighbor light?
 
         long quadData = lightAndBiome;
         quadData |= Integer.toUnsignedLong(modelId)<<26;
@@ -230,9 +239,20 @@ public class RenderDataFactory {
                     sectionData[i * 2] = (block & (0xFFL << 56)) >>> 1;
                     sectionData[i * 2 + 1] = 0;
                 } else {
-                    int modelId = rawModelIds[Mapper.getBlockId(block)];
+                    int blockId = Mapper.getBlockId(block);
+                    VoxyTerrainFailureReason blockValidation = VoxyRuntimeMeshValidator.validateBlockId(blockId, rawModelIds.length);
+                    if (blockValidation != VoxyTerrainFailureReason.NONE) {
+                        this.lastProviderValidationFailure = blockValidation;
+                        return (blockId & ((1 << 20) - 1)) | (1 << 31);
+                    }
+                    int modelId = rawModelIds[blockId];
+                    VoxyTerrainFailureReason modelValidation = VoxyRuntimeMeshValidator.validateModelId(modelId);
+                    if (modelValidation != VoxyTerrainFailureReason.NONE) {
+                        this.lastProviderValidationFailure = modelValidation;
+                        return blockId | (1 << 31);
+                    }
                     if (modelId == -1) {//Failed, so just return error
-                        return Mapper.getBlockId(block) | (1 << 31);
+                        return blockId | (1 << 31);
                     }
                     if (modelId == 0) {//modelId == 0, its basicly air so set it as air
                         sectionData[i * 2] = (block & (0xFFL << 56)) >>> 1;
@@ -241,6 +261,11 @@ public class RenderDataFactory {
                         //TODO: cache the results of this, then link it to `block` do same optimization as SaveLoadSystem3
 
                         long modelMetadata = this.modelMan.getModelMetadataFromClientId(modelId);
+                        VoxyTerrainFailureReason passValidation = VoxyRuntimeMeshValidator.validateSupportedRuntimePass(modelMetadata);
+                        if (passValidation != VoxyTerrainFailureReason.NONE) {
+                            this.lastProviderValidationFailure = passValidation;
+                            return blockId | (1 << 31);
+                        }
 
                         sectionData[i * 2] = packPartialQuadData(modelId, block, modelMetadata);
                         sectionData[i * 2 + 1] = modelMetadata;
@@ -290,63 +315,103 @@ public class RenderDataFactory {
         return neighborMsk;
     }
 
+    private static int yzNeighborSide(int axis, int side) {
+        return ((axis + 1) * 2) + side;
+    }
+
     private void acquireNeighborData(WorldSection section, int msk) {
         //TODO: fixme!!! its probably more efficent to just access the raw section array on demand instead of copying it
         if ((msk&1)!=0) {//-x
-            var sec = this.world.acquire(section.lvl, section.x - 1, section.y, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i] = raw[(i<<5)+31];//pull the +x faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x - 1, section.y, section.z);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 0, 32 * 32, Mapper.AIR);
+                this.neighboringFaceKnown[0] = false;
+            } else {
+                this.neighboringFaceKnown[0] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i] = raw[(i<<5)+31];//pull the +x faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
         if ((msk&2)!=0) {//+x
-            var sec = this.world.acquire(section.lvl, section.x + 1, section.y, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32] = raw[(i<<5)];//pull the -x faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x + 1, section.y, section.z);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 32 * 32, 32 * 32 * 2, Mapper.AIR);
+                this.neighboringFaceKnown[1] = false;
+            } else {
+                this.neighboringFaceKnown[1] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32] = raw[(i<<5)];//pull the -x faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
 
         if ((msk&4)!=0) {//-y
-            var sec = this.world.acquire(section.lvl, section.x, section.y - 1, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*2] = raw[i|(0x1F<<10)];//pull the +y faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x, section.y - 1, section.z);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 32 * 32 * 2, 32 * 32 * 3, Mapper.AIR);
+                this.neighboringFaceKnown[2] = false;
+            } else {
+                this.neighboringFaceKnown[2] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*2] = raw[i|(0x1F<<10)];//pull the +y faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
         if ((msk&8)!=0) {//+y
-            var sec = this.world.acquire(section.lvl, section.x, section.y + 1, section.z);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*3] = raw[i];//pull the -y faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x, section.y + 1, section.z);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 32 * 32 * 3, 32 * 32 * 4, Mapper.AIR);
+                this.neighboringFaceKnown[3] = true;
+            } else {
+                this.neighboringFaceKnown[3] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*3] = raw[i];//pull the -y faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
 
         if ((msk&16)!=0) {//-z
-            var sec = this.world.acquire(section.lvl, section.x, section.y, section.z - 1);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*4] = raw[Integer.expand(i,0b11111_00000_11111)|(0x1F<<5)];//pull the +z faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x, section.y, section.z - 1);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 32 * 32 * 4, 32 * 32 * 5, Mapper.AIR);
+                this.neighboringFaceKnown[4] = false;
+            } else {
+                this.neighboringFaceKnown[4] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*4] = raw[Integer.expand(i,0b11111_00000_11111)|(0x1F<<5)];//pull the +z faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
         if ((msk&32)!=0) {//+z
-            var sec = this.world.acquire(section.lvl, section.x, section.y, section.z + 1);
-            //Note this is not thread safe! (but eh, fk it)
-            var raw = sec._unsafeGetRawDataArray();
-            for (int i = 0; i < 32*32; i++) {
-                this.neighboringFaces[i+32*32*5] = raw[Integer.expand(i,0b11111_00000_11111)];//pull the -z faces from the section
+            var sec = this.world.acquireIfExists(section.lvl, section.x, section.y, section.z + 1);
+            if (sec == null) {
+                Arrays.fill(this.neighboringFaces, 32 * 32 * 5, 32 * 32 * 6, Mapper.AIR);
+                this.neighboringFaceKnown[5] = false;
+            } else {
+                this.neighboringFaceKnown[5] = true;
+                //Note this is not thread safe! (but eh, fk it)
+                var raw = sec._unsafeGetRawDataArray();
+                for (int i = 0; i < 32*32; i++) {
+                    this.neighboringFaces[i+32*32*5] = raw[Integer.expand(i,0b11111_00000_11111)];//pull the -z faces from the section
+                }
+                sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
             }
-            sec.release(WorldSection.RELEASE_HINT_POSSIBLE_REUSE);
         }
     }
 
@@ -381,6 +446,18 @@ public class RenderDataFactory {
         return quad;
     }
 
+    private static long faceLightOrSelf(long selfModel, long neighborLight) {
+        neighborLight &= LM;
+        if (neighborLight != 0) {
+            return neighborLight;
+        }
+        return selfModel & LM;
+    }
+
+    private boolean shouldSuppressSurfacePreviewFace(int axis, int side) {
+        return this.surfacePreviewTopFacesOnly && (axis != 0 || side != 1);
+    }
+
     private void generateYZOpaqueInnerGeometry(int axis) {
         for (int layer = 0; layer < 31; layer++) {
             this.blockMesher.auxiliaryPosition = layer;
@@ -411,6 +488,10 @@ public class RenderDataFactory {
                     msk &= ~Integer.lowestOneBit(msk);
 
                     int facingForward = ((faceForwardMsk >> index) & 1);
+                    if (shouldSuppressSurfacePreviewFace(axis, facingForward)) {
+                        this.blockMesher.skip(1);
+                        continue;
+                    }
 
                     {
                         int idx = index + (pidx*32);
@@ -440,7 +521,7 @@ public class RenderDataFactory {
                             applyQuadLight(
                                 ((long) facingForward) |//Facing
                                 (selfModel&~LM) |
-                                (nextModel&LM),//Apply lighting
+                                faceLightOrSelf(selfModel, nextModel),//Apply lighting
                                 selfMeta
                             ));
                     }
@@ -459,10 +540,11 @@ public class RenderDataFactory {
             int layer = side == 0 ? 0 : 31;
             this.blockMesher.auxiliaryPosition = layer;
             int cSkips = 0;
+            boolean neighborKnown = this.neighboringFaceKnown[yzNeighborSide(axis, side)];
             for (int other = 0; other < 32; other++) {
                 int pidx = axis == 0 ? (layer * 32 + other) : (other * 32 + layer);
                 int msk = this.opaqueMasks[pidx];
-                if (msk == 0) {
+                if (msk == 0 || !neighborKnown || shouldSuppressSurfacePreviewFace(axis, side)) {
                     cSkips += 32;
                     continue;
                 }
@@ -516,7 +598,7 @@ public class RenderDataFactory {
                         this.blockMesher.putNext(applyQuadLight(
                                 ((side == 0) ? 0L : 1L) |
                                 (A&~LM) |
-                                ((neighborId & (0xFFL << 56)) >>> 1),
+                                faceLightOrSelf(A, (neighborId & (0xFFL << 56)) >>> 1),
                                 selfMeta
                                 )
                         );
@@ -562,6 +644,10 @@ public class RenderDataFactory {
                     msk &= ~Integer.lowestOneBit(msk);
 
                     int facingForward = ((faceForwardMsk >> index) & 1);
+                    if (shouldSuppressSurfacePreviewFace(axis, facingForward)) {
+                        this.blockMesher.skip(1);
+                        continue;
+                    }
 
                     {
                         int idx = index + (pidx*32);
@@ -603,7 +689,7 @@ public class RenderDataFactory {
                         this.blockMesher.putNext(applyQuadLight(
                                 ((long) facingForward) |//Facing
                                 (A&~LM) |
-                                (lighter&LM),//Apply lighting
+                                faceLightOrSelf(A, lighter),//Apply lighting
                                 Am)
                         );
                     }
@@ -622,10 +708,11 @@ public class RenderDataFactory {
             int layer = side == 0 ? 0 : 31;
             this.blockMesher.auxiliaryPosition = layer;
             int cSkips = 0;
+            boolean neighborKnown = this.neighboringFaceKnown[yzNeighborSide(axis, side)];
             for (int other = 0; other < 32; other++) {
                 int pidx = axis == 0 ? (layer * 32 + other) : (other * 32 + layer);
                 int msk = this.fluidMasks[pidx];
-                if (msk == 0) {
+                if (msk == 0 || !neighborKnown || shouldSuppressSurfacePreviewFace(axis, side)) {
                     cSkips += 32;
                     continue;
                 }
@@ -687,7 +774,7 @@ public class RenderDataFactory {
                         this.blockMesher.putNext(applyQuadLight(
                                 (side == 0 ? 0L : 1L) |
                                 (A&~LM) |
-                                ((neighborId&(0xFFL<<56))>>>1),
+                                faceLightOrSelf(A, (neighborId&(0xFFL<<56))>>>1),
                                 Am)
                         );
                     }
@@ -740,8 +827,16 @@ public class RenderDataFactory {
                         long A = this.sectionData[idx * 2];
                         long B = this.sectionData[idx * 2+1];
 
-                        meshNonOpaqueFace((axis<<1)|0, A, B, this.sectionData[(idx-skipAmount)*2], this.sectionData[(idx-skipAmount)*2+1], this.seondaryblockMesher);//-
-                        meshNonOpaqueFace((axis<<1)|1, A, B, this.sectionData[(idx+skipAmount)*2], this.sectionData[(idx+skipAmount)*2+1], this.blockMesher);//+
+                        if (shouldSuppressSurfacePreviewFace(axis, 0)) {
+                            this.seondaryblockMesher.skip(1);
+                        } else {
+                            meshNonOpaqueFace((axis<<1)|0, A, B, this.sectionData[(idx-skipAmount)*2], this.sectionData[(idx-skipAmount)*2+1], this.seondaryblockMesher);//-
+                        }
+                        if (shouldSuppressSurfacePreviewFace(axis, 1)) {
+                            this.blockMesher.skip(1);
+                        } else {
+                            meshNonOpaqueFace((axis<<1)|1, A, B, this.sectionData[(idx+skipAmount)*2], this.sectionData[(idx+skipAmount)*2+1], this.blockMesher);//+
+                        }
                     }
                 }
                 this.blockMesher.endRow();
@@ -763,10 +858,11 @@ public class RenderDataFactory {
             this.blockMesher.auxiliaryPosition = layer;
             this.seondaryblockMesher.auxiliaryPosition = layer;
             int cSkips = 0;
+            boolean neighborKnown = this.neighboringFaceKnown[yzNeighborSide(axis, side)];
             for (int other = 0; other < 32; other++) {
                 int pidx = axis == 0 ? (layer * 32 + other) : (other * 32 + layer);
                 int msk = this.nonOpaqueMasks[pidx];
-                if (msk == 0) {
+                if (msk == 0 || shouldSuppressSurfacePreviewFace(axis, side)) {
                     cSkips += 32;
                     continue;
                 }
@@ -796,9 +892,9 @@ public class RenderDataFactory {
                         long A = this.sectionData[idx * 2];
                         long Am = this.sectionData[idx * 2 + 1];
 
-                        boolean fail = false;
+                        boolean fail = !neighborKnown;
                         //Check and test if can cull W.R.T neighbor
-                        if (Mapper.getBlockId(neighborId) != 0) {//Not air
+                        if (!fail && Mapper.getBlockId(neighborId) != 0) {//Not air
                             int modelId = this.modelMan.getModelId(Mapper.getBlockId(neighborId));
 
 
@@ -834,7 +930,7 @@ public class RenderDataFactory {
                             this.blockMesher.putNext(applyQuadLight(
                                     (long) (false ? 0L : 1L) |
                                     A |
-                                    0,//((ModelQueries.faceUsesSelfLighting(B, (axis<<1)|1)?A:) & (0xFFL << 55))//TODO:THIS
+                                    (A & LM),
                                     Am)
                             );
                         } else {
@@ -845,7 +941,7 @@ public class RenderDataFactory {
                             this.seondaryblockMesher.putNext(applyQuadLight(
                                     (long) (true ? 0L : 1L) |
                                     A |
-                                    0,//(((0xFFL) & 0xFF) << 55)//TODO:THIS
+                                    (A & LM),
                                     Am)
                             );
                         } else {
@@ -1002,7 +1098,7 @@ public class RenderDataFactory {
                         mesher.putNext(applyQuadLight(
                                 ((long) facingForward) |//Facing
                                 (selfModel&~LM) |
-                                (nextModel&LM),//TODO FIX THIS (self lighting)
+                                faceLightOrSelf(selfModel, nextModel),
                                 selfMeta
                                 )
                         );
@@ -1050,7 +1146,7 @@ public class RenderDataFactory {
             for (int z = 0; z < 32; z++) {
                 int i = y*32+z;
                 int msk = this.opaqueMasks[i];
-                if ((msk & 1) != 0) {//-x
+                if ((msk & 1) != 0 && this.neighboringFaceKnown[0]) {//-x
                     long neighborId = this.neighboringFaces[i];
                     boolean oki = true;
                     if (Mapper.getBlockId(neighborId) != 0) {//Not air
@@ -1076,7 +1172,7 @@ public class RenderDataFactory {
                     } else {skipA++;}
                 } else {skipA++;}
 
-                if ((msk & (1<<31)) != 0) {//+x
+                if ((msk & (1<<31)) != 0 && this.neighboringFaceKnown[1]) {//+x
                     long neighborId = this.neighboringFaces[i+32*32];
                     boolean oki = true;
                     if (Mapper.getBlockId(neighborId) != 0) {//Not air
@@ -1272,7 +1368,7 @@ public class RenderDataFactory {
             for (int z = 0; z < 32; z++) {
                 int i = y*32+z;
                 int msk = this.fluidMasks[i];
-                if ((msk & 1) != 0) {//-x
+                if ((msk & 1) != 0 && this.neighboringFaceKnown[0]) {//-x
                     long neighborId = this.neighboringFaces[i];
                     boolean oki = true;
 
@@ -1337,7 +1433,7 @@ public class RenderDataFactory {
                     } else {skipA++;}
                 } else {skipA++;}
 
-                if ((msk & (1<<31)) != 0) {//+x
+                if ((msk & (1<<31)) != 0 && this.neighboringFaceKnown[1]) {//+x
                     long neighborId = this.neighboringFaces[i+32*32];
                     boolean oki = true;
 
@@ -1521,7 +1617,7 @@ public class RenderDataFactory {
         //side == 0 if is on 0 side and 1 if on 31 side
 
         //TODO: Check (neighborAId!=0) && works oki
-        if ((neighborAId==0 && ModelQueries.faceExists(meta, ((2<<1)|0)^side))||(neighborAId!=0&&shouldMeshNonOpaqueBlockFace(((2<<1)|0)^side, quad, meta, ((long)neighborAId)<<26, neighborAMeta))) {
+        if (neighborAId >= 0 && ((neighborAId==0 && ModelQueries.faceExists(meta, ((2<<1)|0)^side))||(neighborAId!=0&&shouldMeshNonOpaqueBlockFace(((2<<1)|0)^side, quad, meta, ((long)neighborAId)<<26, neighborAMeta)))) {
             ma.putNext(applyQuadLight(
                     ((long)side)|
                     (quad&~LM) |
@@ -1566,9 +1662,9 @@ public class RenderDataFactory {
                     long A = this.sectionData[sidx];
                     long Am = this.sectionData[sidx + 1];
 
-                    int modelId = 0;
+                    int modelId = this.neighboringFaceKnown[0] ? 0 : -1;
                     long nM = 0;
-                    if (Mapper.getBlockId(neighborId) != 0) {//Not air
+                    if (modelId >= 0 && Mapper.getBlockId(neighborId) != 0) {//Not air
                         modelId = this.modelMan.getModelId(Mapper.getBlockId(neighborId));
                         nM = this.modelMan.getModelMetadataFromClientId(modelId);
                     }
@@ -1588,9 +1684,9 @@ public class RenderDataFactory {
                     long A = this.sectionData[sidx];
                     long Am = this.sectionData[sidx + 1];
 
-                    int modelId = 0;
+                    int modelId = this.neighboringFaceKnown[1] ? 0 : -1;
                     long nM = 0;
-                    if (Mapper.getBlockId(neighborId) != 0) {//Not air
+                    if (modelId >= 0 && Mapper.getBlockId(neighborId) != 0) {//Not air
                         modelId = this.modelMan.getModelId(Mapper.getBlockId(neighborId));
                         nM = this.modelMan.getModelMetadataFromClientId(modelId);
                     }
@@ -1609,6 +1705,9 @@ public class RenderDataFactory {
     }
 
     private void generateXFaces() {
+        if (this.surfacePreviewTopFacesOnly) {
+            return;
+        }
         this.generateXOpaqueInnerGeometry();
         this.generateXOuterOpaqueGeometry();
 
@@ -1725,9 +1824,20 @@ public class RenderDataFactory {
         Arrays.fill(this.opaqueMasks, 0);
         Arrays.fill(this.nonOpaqueMasks, 0);
         Arrays.fill(this.fluidMasks, 0);
+        Arrays.fill(this.neighboringFaceKnown, false);
+        this.lastProviderValidationFailure = VoxyTerrainFailureReason.NONE;
 
         //Prepare everything
+        VoxelizedSection.SourceKind sourceKind = section.getSourceKind();
+        this.surfacePreviewTopFacesOnly = SURFACE_PREVIEW_TOP_FACES_ONLY
+                && (sourceKind == VoxelizedSection.SourceKind.SURFACE_PREVIEW
+                || sourceKind == VoxelizedSection.SourceKind.SYNTHETIC_PREVIEW);
         int neighborMskAndFlags = this.prepareSectionData(section._unsafeGetRawDataArray());
+        VoxyTerrainFailureReason providerValidation = this.validatePreparedSectionForProvider(section, neighborMskAndFlags);
+        if (providerValidation != VoxyTerrainFailureReason.NONE
+                && providerValidation != VoxyTerrainFailureReason.MISSING_MODEL_FALLBACK) {
+            return BuiltSection.emptyWithChildren(section.key, section.getNonEmptyChildren());
+        }
         if ((neighborMskAndFlags&(1<<31))!=0) {//We failed to get everything so throw exception
             throw new IdNotYetComputedException(neighborMskAndFlags&((1<<20)-1), true);
         }
@@ -1799,6 +1909,29 @@ public class RenderDataFactory {
         }
 
         return new BuiltSection(section.key, section.getNonEmptyChildren(), aabb, buff, offsets, occupancy);
+    }
+
+    private VoxyTerrainFailureReason validatePreparedSectionForProvider(WorldSection section, int neighborMskAndFlags) {
+        VoxyTerrainFailureReason bounds = VoxyTerrainTileValidator.validateBounds(0, 0, 0, 32, 32, 32);
+        if (bounds != VoxyTerrainFailureReason.NONE) {
+            Logger.warn("Rejecting invalid Voxy provider section bounds for " + WorldEngine.pprintPos(section.key));
+            return bounds;
+        }
+        if (this.lastProviderValidationFailure != VoxyTerrainFailureReason.NONE) {
+            return this.lastProviderValidationFailure;
+        }
+        if ((neighborMskAndFlags & (1 << 31)) != 0) {
+            return VoxyTerrainFailureReason.MISSING_MODEL_FALLBACK;
+        }
+        VoxyTerrainFailureReason source = VoxyTerrainTileValidator.validateSource(section);
+        if (source != VoxyTerrainFailureReason.NONE) {
+            return source;
+        }
+        return VoxyTerrainFailureReason.NONE;
+    }
+
+    public VoxyTerrainFailureReason getLastProviderValidationFailure() {
+        return this.lastProviderValidationFailure;
     }
 
     public void free() {

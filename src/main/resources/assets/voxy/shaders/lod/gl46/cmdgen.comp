@@ -25,6 +25,13 @@ layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBu
 };
 #endif
 
+layout(binding = PROVIDER_RENDER_LIST_BUFFER_BINDING, std430) readonly restrict buffer ProviderRenderList {
+    uint providerRenderListEnabled;
+    uint providerRenderListCount;
+    uint providerRenderListPassMask;
+    uint providerRenderList[];
+};
+
 /*
     uint  count;
     uint  instanceCount;
@@ -49,10 +56,17 @@ void writeCmd(uint idx, uint instance, uint offset, uint quadCount) {
 }
 
 void main() {
-    if (gl_GlobalInvocationID.x >= sectionCount) {
+    bool providerListMode = providerRenderListEnabled != 0u;
+    bool providerDrawSolidBuffers = !providerListMode || (providerRenderListPassMask & 1u) != 0u;
+    bool providerDrawCutoutBuffers = !providerListMode || (providerRenderListPassMask & 2u) != 0u;
+    uint sourceSectionCount = providerListMode ? providerRenderListCount : sectionCount;
+    if (gl_GlobalInvocationID.x >= sourceSectionCount) {
         return;
     }
     uint sectionId = indirectLookup[gl_GlobalInvocationID.x];
+    if (providerListMode) {
+        sectionId = providerRenderList[gl_GlobalInvocationID.x];
+    }
     SectionMeta meta = sectionData[sectionId];
     uint detail = extractDetail(meta);
     ivec3 ipos = extractPosition(meta);
@@ -63,8 +77,8 @@ void main() {
     uint dat = visibilityData[sectionId];
 
     //if the section was visible this frame
-    bool shouldRender = (dat&0x7fffffffu) == frameId;
-    bool renderTemporally = (dat&0x80000000u)==0;// means, if it was not visible last frame
+    bool shouldRender = providerListMode || (dat&0x7fffffffu) == frameId;
+    bool renderTemporally = !providerListMode && (dat&0x80000000u)==0;// means, if it was not visible last frame
 
 
 
@@ -83,14 +97,14 @@ void main() {
 
         //TODO implicit command merging
         uint msk = 0;
-        msk |= uint(((counts.y      &0xFFFFu)!=0) && (relative.y>-1))<<0;
-        msk |= uint((((counts.y>>16)&0xFFFFu)!=0) && (relative.y<1 ))<<1;
-        msk |= uint(((counts.z      &0xFFFFu)!=0) && (relative.z>-1))<<2;
-        msk |= uint((((counts.z>>16)&0xFFFFu)!=0) && (relative.z<1 ))<<3;
-        msk |= uint(((counts.w      &0xFFFFu)!=0) && (relative.x>-1))<<4;
-        msk |= uint((((counts.w>>16)&0xFFFFu)!=0) && (relative.x<1 ))<<5;
+        msk |= uint(providerDrawSolidBuffers && ((counts.y      &0xFFFFu)!=0) && (relative.y>-1))<<0;
+        msk |= uint(providerDrawSolidBuffers && (((counts.y>>16)&0xFFFFu)!=0) && (relative.y<1 ))<<1;
+        msk |= uint(providerDrawSolidBuffers && ((counts.z      &0xFFFFu)!=0) && (relative.z>-1))<<2;
+        msk |= uint(providerDrawSolidBuffers && (((counts.z>>16)&0xFFFFu)!=0) && (relative.z<1 ))<<3;
+        msk |= uint(providerDrawSolidBuffers && ((counts.w      &0xFFFFu)!=0) && (relative.x>-1))<<4;
+        msk |= uint(providerDrawSolidBuffers && (((counts.w>>16)&0xFFFFu)!=0) && (relative.x<1 ))<<5;
 
-        msk |= uint(((counts.x>>16)&0xFFFFu)!=0)<<6;
+        msk |= uint(providerDrawCutoutBuffers && ((counts.x>>16)&0xFFFFu)!=0)<<6;
 
 
         uint cmdCnt = bitCount(msk);

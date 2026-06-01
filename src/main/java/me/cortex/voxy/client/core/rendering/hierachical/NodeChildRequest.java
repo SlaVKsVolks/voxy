@@ -7,6 +7,7 @@ class NodeChildRequest {
 
     private final int[] childStates = new int[]{-1,-1,-1,-1,-1,-1,-1,-1};
     private final byte[] childChildExistence = new byte[]{(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0,(byte) 0};
+    private final long[] childStateEpochs = new long[8];
 
     private byte results;
     private byte mask;
@@ -98,6 +99,20 @@ class NodeChildRequest {
 
     public byte getMsk() {
         return this.mask;
+    }
+
+    public void setChildStateEpoch(int childIdx, long stateEpoch) {
+        if ((this.mask&(1<<childIdx))==0) {
+            throw new IllegalStateException("Tried setting child epoch when child isnt in mask");
+        }
+        this.childStateEpochs[childIdx] = stateEpoch;
+    }
+
+    public long getChildStateEpoch(int childIdx) {
+        if ((this.mask&(1<<childIdx))==0) {
+            throw new IllegalStateException("Tried getting child epoch when child isnt in mask");
+        }
+        return this.childStateEpochs[childIdx];
     }
 
 }

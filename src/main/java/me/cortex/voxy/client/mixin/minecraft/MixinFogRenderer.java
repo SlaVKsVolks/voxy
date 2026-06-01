@@ -2,6 +2,7 @@ package me.cortex.voxy.client.mixin.minecraft;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.FogRenderer;
@@ -47,7 +48,7 @@ public class MixinFogRenderer {
             // Capture original fog values BEFORE we modify them,
             // so Voxy's own fog pass can use the correct values
             float capturedFogEnd = noFogType ?
-                VoxyConfig.CONFIG.sectionRenderDistance * 32 * 16 : RenderSystem.getShaderFogEnd();
+                VoxyHandoffPolicy.visualTerrainDistanceBlocks() : RenderSystem.getShaderFogEnd();
 
             vrs.setCapturedFog(RenderSystem.getShaderFogStart(), capturedFogEnd, RenderSystem.getShaderFogColor());
 

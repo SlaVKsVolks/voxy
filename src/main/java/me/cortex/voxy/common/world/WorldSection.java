@@ -2,6 +2,7 @@ package me.cortex.voxy.common.world;
 
 
 import me.cortex.voxy.commonImpl.VoxyCommon;
+import me.cortex.voxy.common.voxelization.VoxelizedSection;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -54,6 +55,10 @@ public final class WorldSection {
     long[] data = null;
     volatile int nonEmptyBlockCount = 0;//Note: only needed for level 0 sections
     volatile byte nonEmptyChildren;
+    volatile long dataEpoch;
+    volatile VoxelizedSection.LightSourceKind lightSourceKind = VoxelizedSection.LightSourceKind.UNKNOWN;
+    volatile VoxelizedSection.SourceKind sourceKind = VoxelizedSection.SourceKind.UNKNOWN;
+    volatile VoxelizedSection.Confidence confidence = VoxelizedSection.Confidence.UNKNOWN;
 
     final ActiveSectionTracker tracker;
     volatile boolean inSaveQueue;
@@ -166,12 +171,18 @@ public final class WorldSection {
 
     //Returns true on success, false on failure
     boolean trySetFreed() {
+        if (this.isDirty || this.inSaveQueue) {
+            return false;
+        }
         int witness = (int) ATOMIC_STATE_HANDLE.compareAndExchange(this, 1, 0);
         if ((witness & 1) == 0 && witness != 0) {
             throw new IllegalStateException("Section marked as free but has refs");
         }
         if (witness == 1 && (this.isDirty || this.inSaveQueue)) {
-            throw new IllegalStateException("Section freed while marked as dirty or in the save queue: " + (this.isDirty?"dirty, ":"") + (this.inSaveQueue?"saveQueue":""));
+            // A concurrent dirty/save transition won the race after the pre-check.
+            // Restore the live bit so the tracker can retry after the save queue drains.
+            ATOMIC_STATE_HANDLE.compareAndSet(this, 0, 1);
+            return false;
         }
         return witness == 1;
     }
@@ -207,9 +218,15 @@ public final class WorldSection {
     }
 
     public long set(int x, int y, int z, long id) {
-        //TODO: this needs to update the block counts
         int idx = getIndex(x,y,z);
         long old = this.data[idx];
+        if (this.lvl == 0 && old != id) {
+            if (old == 0 && id != 0) {
+                NON_EMPTY_BLOCK_HANDLE.getAndAdd(this, 1);
+            } else if (old != 0 && id == 0) {
+                NON_EMPTY_BLOCK_HANDLE.getAndAdd(this, -1);
+            }
+        }
         this.data[idx] = id;
         return old;
     }
@@ -282,6 +299,41 @@ public final class WorldSection {
 
     public void _unsafeSetNonEmptyChildren(byte nonEmptyChildren) {
         NON_EMPTY_CHILD_HANDLE.set(this, nonEmptyChildren);
+    }
+
+    public long getDataEpoch() {
+        return this.dataEpoch;
+    }
+
+    public VoxelizedSection.LightSourceKind getLightSourceKind() {
+        return this.lightSourceKind;
+    }
+
+    public VoxelizedSection.SourceKind getSourceKind() {
+        return this.sourceKind;
+    }
+
+    public VoxelizedSection.Confidence getConfidence() {
+        return this.confidence;
+    }
+
+    public boolean hasTrustedRealData() {
+        return this.sourceKind == VoxelizedSection.SourceKind.REAL_CHUNK
+                && this.confidence.atLeast(VoxelizedSection.Confidence.HIGH)
+                && VoxelizedSection.isTrustedLight(this.lightSourceKind);
+    }
+
+    public void setPublicationMetadata(VoxelizedSection section) {
+        this.dataEpoch = section.dataEpoch;
+        this.lightSourceKind = section.lightSourceKind == null
+                ? VoxelizedSection.LightSourceKind.UNKNOWN
+                : section.lightSourceKind;
+        this.sourceKind = section.sourceKind == null
+                ? VoxelizedSection.SourceKind.UNKNOWN
+                : section.sourceKind;
+        this.confidence = section.confidence == null
+                ? VoxelizedSection.Confidence.UNKNOWN
+                : section.confidence;
     }
 
     public static WorldSection _createRawUntrackedUnsafeSection(int lvl, int x, int y, int z) {

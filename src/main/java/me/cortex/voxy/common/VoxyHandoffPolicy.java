@@ -150,6 +150,19 @@ public final class VoxyHandoffPolicy {
         return maxDistanceChunks >= start && minDistanceChunks <= end;
     }
 
+    public static boolean hasRequiredVoxyCoverageBeyondVanilla() {
+        return voxyLodEndChunks > vanillaRadiusChunks;
+    }
+
+    public static boolean isRequiredVoxyCoverageSection(int level, int sectionX, int sectionZ) {
+        if (!hasRequiredVoxyCoverageBeyondVanilla()) {
+            return false;
+        }
+        double minDistanceChunks = sectionMinDistanceChunks(level, sectionX, sectionZ);
+        double maxDistanceChunks = sectionMaxDistanceChunks(level, sectionX, sectionZ);
+        return maxDistanceChunks > vanillaRadiusChunks && minDistanceChunks <= voxyLodEndChunks;
+    }
+
     public static double sectionMinDistanceChunks(int level, int sectionX, int sectionZ) {
         int sizeBlocks = 1 << (level + 5);
         double minX = (double) sectionX * sizeBlocks;

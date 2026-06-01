@@ -173,7 +173,7 @@ public class TestNodeManager {
             this.watcher = new Watcher();
             this.cleaner = new CleanerImp();
             this.geometryManager = new MemoryGeometryManager(1<<20, 1<<30);
-            this.nodeManager = new NodeManager(1 << 21, this.geometryManager, this.watcher);
+            this.nodeManager = new NodeManager(1 << 21, this.geometryManager, this.watcher, null);
             this.nodeManager.setClear(this.cleaner);
         }
 

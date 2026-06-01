@@ -4,11 +4,18 @@ import it.unimi.dsi.fastutil.longs.Long2ShortOpenHashMap;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.ThreadLocalMemoryBuffer;
+import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.world.other.Mapper;
 import org.lwjgl.system.MemoryUtil;
 
 public class SaveLoadSystem3 {
-    public static final int STORAGE_VERSION = 0;
+    // Versions before 5 can contain synthetic-light previews or snow/cave-biased
+    // mip lighting from the NeoForge backport. Drop and regenerate those sections.
+    public static final int STORAGE_VERSION = 5;
+    private static final int SOURCE_KIND_SHIFT = 24;
+    private static final int CONFIDENCE_SHIFT = 28;
+    private static final int LIGHT_KIND_SHIFT = 32;
+    private static final long FOUR_BIT_MASK = 0xFL;
 
     private record SerializationCache(Long2ShortOpenHashMap lutMapCache, MemoryBuffer memoryBuffer) {
         public SerializationCache() {
@@ -65,11 +72,13 @@ public class SaveLoadSystem3 {
             throw new IllegalStateException();
         }
 
-        //TODO: note! can actually have the first (last?) byte of metadata be the storage version!
         long metadata = 0;
         metadata |= Integer.toUnsignedLong(LUT.size());//Bottom 2 bytes
         metadata |= Byte.toUnsignedLong(section.getNonEmptyChildren())<<16;//Next byte
-        //5 bytes free
+        metadata |= ((long) section.getSourceKind().ordinal() & FOUR_BIT_MASK) << SOURCE_KIND_SHIFT;
+        metadata |= ((long) section.getConfidence().ordinal() & FOUR_BIT_MASK) << CONFIDENCE_SHIFT;
+        metadata |= ((long) section.getLightSourceKind().ordinal() & FOUR_BIT_MASK) << LIGHT_KIND_SHIFT;
+        metadata |= Integer.toUnsignedLong(STORAGE_VERSION & 0xFF) << 56;
 
         MemoryUtil.memPutLong(metadataPtr, metadata);
         //TODO: do hash
@@ -88,7 +97,30 @@ public class SaveLoadSystem3 {
         }
 
         final long metadata = MemoryUtil.memGetLong(ptr); ptr += 8;
+        int storageVersion = (int) ((metadata >>> 56) & 0xFF);
+        if (storageVersion != STORAGE_VERSION) {
+            Logger.warn("Dropping stale Voxy section "
+                    + section.lvl + ", " + section.x + ", " + section.y + ", " + section.z
+                    + " from storage version " + storageVersion + " expected " + STORAGE_VERSION);
+            return false;
+        }
         section.nonEmptyChildren = (byte) ((metadata>>>16)&0xFF);
+        section.sourceKind = enumAt(
+                VoxelizedSection.SourceKind.values(),
+                (int) ((metadata >>> SOURCE_KIND_SHIFT) & FOUR_BIT_MASK),
+                VoxelizedSection.SourceKind.UNKNOWN
+        );
+        section.confidence = enumAt(
+                VoxelizedSection.Confidence.values(),
+                (int) ((metadata >>> CONFIDENCE_SHIFT) & FOUR_BIT_MASK),
+                VoxelizedSection.Confidence.UNKNOWN
+        );
+        section.lightSourceKind = enumAt(
+                VoxelizedSection.LightSourceKind.values(),
+                (int) ((metadata >>> LIGHT_KIND_SHIFT) & FOUR_BIT_MASK),
+                VoxelizedSection.LightSourceKind.UNKNOWN
+        );
+        section.dataEpoch = 1L;
         final long lutBasePtr = ptr + WorldSection.SECTION_VOLUME * 2;
 
         final var blockData = section.data;
@@ -106,5 +138,9 @@ public class SaveLoadSystem3 {
 
         ptr = lutBasePtr + (metadata & 0xFFFF) * 8L;
         return true;
+    }
+
+    private static <T> T enumAt(T[] values, int index, T fallback) {
+        return index >= 0 && index < values.length ? values[index] : fallback;
     }
 }

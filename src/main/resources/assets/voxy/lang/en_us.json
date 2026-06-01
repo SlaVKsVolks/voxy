@@ -34,5 +34,21 @@
   "voxy.config.general.ssao_mode.basic": "Basic",
   "voxy.config.general.ssao_mode.better": "Better",
   "voxy.config.general.ssao_mode.best": "Best",
+
+  "voxy.config.general.adaptCloudDistance": "Adapt cloud distance",
+  "voxy.config.general.adaptCloudDistance.tooltip": "Automatically adjusts Sodium's cloud render distance so clouds do not clip through Voxy LoD terrain.",
+
+  "voxy.config.general.cloudDistance": "Cloud distance",
+  "voxy.config.general.cloudDistance.tooltip": "Overrides the cloud render distance used with Voxy. Set to 0 to use Sodium's configured value.",
+
+  "voxy.config.general.fogIntensity": "Fog intensity",
+  "voxy.config.general.fogIntensity.tooltip": "Controls how strongly Voxy LoD terrain blends into fog.",
+
+  "voxy.config.general.fogDensity": "Fog density",
+  "voxy.config.general.fogDensity.tooltip": "Controls the curve used by Voxy LoD fog. Higher values make distant LoDs fog more aggressively.",
+
+  "voxy.config.general.skyFogDistance": "Sky fog distance",
+  "voxy.config.general.skyFogDistance.tooltip": "Controls the distance used for sky fog when Voxy is rendering LoDs.",
+
   "voxy.diagnostics.capture.done": "Voxy diagnostics captured"
 }

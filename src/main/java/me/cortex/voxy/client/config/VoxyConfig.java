@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import me.cortex.voxy.client.core.SSAO;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import net.neoforged.fml.loading.FMLPaths;
@@ -28,9 +29,16 @@ public class VoxyConfig {
     public boolean enabled = true;
     public boolean enableRendering = true;
     public boolean ingestEnabled = true;
+    public int visualTerrainDistanceChunks = 0;
+    public int maxRealChunkRadiusChunks = VoxyHandoffPolicy.defaultMaxRealRenderDistanceChunks();
+    public int handoffOverlapChunks = VoxyHandoffPolicy.defaultOverlapChunks();
+    /**
+     * Deprecated migration field. Rendering must use visualTerrainDistanceChunks
+     * through VoxyHandoffPolicy instead of reading this value directly.
+     */
     public float sectionRenderDistance = 16;
     public int serviceThreads = (int) Math.max(CpuLayout.getCoreCount()/1.5, 1);
-    public float subDivisionSize = 64;
+    public float subDivisionSize = 8;
     public int skyFogDistance = 96;
     public float fogIntensity = 1.0f;
     public float fogDensity = 0.0f;
@@ -41,6 +49,7 @@ public class VoxyConfig {
     public boolean uniformBridgeDebug = false;
     public boolean lodCullingDebug = false;
     public boolean depthCompositionDebug = false;
+    public boolean amdHizReadSideFilter = true;
 
     public String ssaoMode;
 
@@ -58,15 +67,16 @@ public class VoxyConfig {
     }
 
     private static VoxyConfig loadOrCreate() {
-        // The NeoForge client config can be initialized before Voxy registers its
-        // instance factory. Gating config loading on isAvailable() permanently
-        // disabled rendering for that launch even when voxy-config.json enabled it.
-        if (VoxyCommon.IS_IN_MINECRAFT) {
+        // The NeoForge client config can be initialized before ModList reports
+        // Voxy as loaded. Always try the real config path first so early static
+        // initialization cannot silently force rendering off for the whole launch.
+        try {
             var path = getConfigPath();
             if (Files.exists(path)) {
                 try (FileReader reader = new FileReader(path.toFile())) {
                     var conf = GSON.fromJson(reader, VoxyConfig.class);
                     if (conf != null) {
+                        conf.normalizeMergedRenderDistanceSettings();
                         conf.save();
                         return conf;
                     } else {
@@ -78,9 +88,11 @@ public class VoxyConfig {
             }
             Logger.info("Config doesnt exist, creating new");
             var config = new VoxyConfig();
+            config.normalizeMergedRenderDistanceSettings();
             config.save();
             return config;
-        } else {
+        } catch (RuntimeException e) {
+            Logger.error("Could not access voxy config path", e);
             var config = new VoxyConfig();
             config.enabled = false;
             config.enableRendering = false;
@@ -89,6 +101,7 @@ public class VoxyConfig {
     }
 
     public void save() {
+        this.normalizeMergedRenderDistanceSettings();
         if (!VoxyCommon.IS_IN_MINECRAFT) {
             Logger.info("Not saving config since voxy is unavalible");
             return;
@@ -106,6 +119,21 @@ public class VoxyConfig {
     }
 
     public boolean isRenderingEnabled() {
-        return VoxyCommon.isAvailable() && this.enabled && this.enableRendering;
+        return this.enabled && this.enableRendering;
+    }
+
+    public void normalizeMergedRenderDistanceSettings() {
+        if (this.visualTerrainDistanceChunks <= 0) {
+            this.visualTerrainDistanceChunks = Math.max(2, Math.round(this.sectionRenderDistance * 32.0f));
+        }
+        this.visualTerrainDistanceChunks = Math.clamp(this.visualTerrainDistanceChunks, 2, 512);
+        this.maxRealChunkRadiusChunks = Math.clamp(this.maxRealChunkRadiusChunks, 2, 32);
+        this.handoffOverlapChunks = Math.clamp(this.handoffOverlapChunks, 0, 32);
+        VoxyHandoffPolicy.updateDistance(
+                this.visualTerrainDistanceChunks,
+                this.maxRealChunkRadiusChunks,
+                this.handoffOverlapChunks,
+                this.isRenderingEnabled() ? "voxy_merged" : "vanilla"
+        );
     }
 }

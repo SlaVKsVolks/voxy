@@ -1,5 +1,6 @@
 package me.cortex.voxy.common.world;
 
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.world.other.Mapper;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -23,6 +24,13 @@ public class WorldUpdater {
         WorldSection previousSection = null;
         for (int lvl = 0; lvl <= MAX_LOD_LAYER; lvl++) {
             var worldSection = into.acquire(lvl, section.x >> (lvl + 1), section.y >> (lvl + 1), section.z >> (lvl + 1));
+            if (!canPublish(section, worldSection, lvl)) {
+                worldSection.release();
+                if (previousSection != null) {
+                    previousSection.release();
+                }
+                return;
+            }
 
             int emptinessStateChange = 0;
             //Propagate the child existence state of the previous iteration to this section
@@ -36,6 +44,14 @@ public class WorldUpdater {
             long status = insertSectionLvlIntoWorld(section, worldSection);
             boolean didStateChange = (status&1)==1;
             int airCount = (int) ((status>>1)&0x1FFF);
+            // Publication metadata is currently section-wide. Parent LoD sections aggregate many
+            // children, so stamping a parent as REAL_CHUNK because one child is real incorrectly
+            // rejects preview data for sibling cells and leaves large holes. Keep strict
+            // confidence/epoch metadata at level 0 until parent metadata becomes per-cell.
+            boolean metadataChanged = lvl == 0 && hasPublicationMetadataChanged(section, worldSection);
+            if (didStateChange || metadataChanged) {
+                worldSection.setPublicationMetadata(section);
+            }
 
 
             if (lvl == 0) {
@@ -46,7 +62,7 @@ public class WorldUpdater {
                 }
             }
 
-            if (didStateChange||(emptinessStateChange!=0)) {
+            if (didStateChange||metadataChanged||(emptinessStateChange!=0)) {
                 //TODO: somehow foward the neighbors that are facing the updated area, this allows forwarding to the dirty consumer
                 // which can decide wether to dispatch mesh rebuilds to the surounding sections
                 //Bitmask of neighboring sections
@@ -65,7 +81,7 @@ public class WorldUpdater {
             }
 
             //Need to release the section after using it
-            if (didStateChange||(emptinessStateChange==2)) {
+            if (didStateChange||metadataChanged||(emptinessStateChange==2)) {
                 if (emptinessStateChange==2) {
                     //Major state emptiness change, bubble up
                     shouldCheckEmptiness = true;
@@ -87,6 +103,156 @@ public class WorldUpdater {
         if (previousSection != null) {
             previousSection.release();
         }
+    }
+
+    private static boolean canPublish(VoxelizedSection incoming, WorldSection current, int targetLodLevel) {
+        long pos = current.key;
+        VoxelizedSection.SourceKind incomingSource = incoming.sourceKind == null
+                ? VoxelizedSection.SourceKind.UNKNOWN
+                : incoming.sourceKind;
+        VoxelizedSection.Confidence incomingConfidence = incoming.confidence == null
+                ? VoxelizedSection.Confidence.UNKNOWN
+                : incoming.confidence;
+        VoxelizedSection.LightSourceKind incomingLight = incoming.lightSourceKind == null
+                ? VoxelizedSection.LightSourceKind.UNKNOWN
+                : incoming.lightSourceKind;
+
+        if (incomingLight == VoxelizedSection.LightSourceKind.MISSING_SKY_LIGHT) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "missing_light_ready_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "missing_light_cannot_publish_visible_lod"
+            );
+            return false;
+        }
+
+        if (incomingLight == VoxelizedSection.LightSourceKind.SYNTHETIC_SURFACE_PREVIEW
+                && incomingSource != VoxelizedSection.SourceKind.SURFACE_PREVIEW
+                && incomingSource != VoxelizedSection.SourceKind.SYNTHETIC_PREVIEW
+                && incomingSource != VoxelizedSection.SourceKind.ZERO_CLEAR) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "synthetic_light_ready_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "synthetic_light_requires_provisional_source"
+            );
+            return false;
+        }
+
+        if (targetLodLevel > 0) {
+            return true;
+        }
+
+        boolean incomingPreview = incoming.isProvisional();
+        if (incomingPreview && current.hasTrustedRealData()) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "provisional_over_real_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "provisional_cannot_overwrite_trusted_real"
+            );
+            return false;
+        }
+
+        boolean hasCommittedEpoch = current.getDataEpoch() > 0L;
+        boolean oldEpoch = hasCommittedEpoch && incoming.dataEpoch > 0L && incoming.dataEpoch < current.getDataEpoch();
+        if (oldEpoch) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "old_epoch_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "stale_async_publish_rejected"
+            );
+            return false;
+        }
+
+        boolean lowerConfidence = incomingConfidence.rank < current.getConfidence().rank;
+        boolean lowerSource = VoxelizedSection.sourceRank(incomingSource) < VoxelizedSection.sourceRank(current.getSourceKind());
+        boolean explicitClear = incomingSource == VoxelizedSection.SourceKind.ZERO_CLEAR;
+        boolean validationPreviewClear = explicitClear && incomingConfidence.rank < VoxelizedSection.Confidence.HIGH.rank;
+        if (validationPreviewClear
+                && current.getSourceKind() != VoxelizedSection.SourceKind.UNKNOWN
+                && current.getSourceKind() != VoxelizedSection.SourceKind.ZERO_CLEAR
+                && current.getNonEmptyBlockCount() > 0) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "preview_zero_clear_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "preview_zero_clear_cannot_erase_non_empty_lod"
+            );
+            return false;
+        }
+        if ((lowerConfidence || lowerSource) && !explicitClear && current.getSourceKind() != VoxelizedSection.SourceKind.UNKNOWN) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "lower_confidence_rejected",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    lowerSource ? "lower_source_rank_rejected" : "lower_confidence_rejected"
+            );
+            return false;
+        }
+        if ((lowerConfidence || lowerSource) && explicitClear) {
+            RenderCorrectnessDiagnostics.publicationGuard(
+                    "zero_clear_explicit_invalidation",
+                    pos,
+                    current.getDataEpoch(),
+                    incoming.dataEpoch,
+                    current.getSourceKind().name(),
+                    incomingSource.name(),
+                    current.getConfidence().name(),
+                    incomingConfidence.name(),
+                    "zero_clear_explicit_invalidation"
+            );
+        }
+
+        return true;
+    }
+
+    private static boolean hasPublicationMetadataChanged(VoxelizedSection incoming, WorldSection current) {
+        VoxelizedSection.SourceKind incomingSource = incoming.sourceKind == null
+                ? VoxelizedSection.SourceKind.UNKNOWN
+                : incoming.sourceKind;
+        VoxelizedSection.Confidence incomingConfidence = incoming.confidence == null
+                ? VoxelizedSection.Confidence.UNKNOWN
+                : incoming.confidence;
+        VoxelizedSection.LightSourceKind incomingLight = incoming.lightSourceKind == null
+                ? VoxelizedSection.LightSourceKind.UNKNOWN
+                : incoming.lightSourceKind;
+        return current.getDataEpoch() != incoming.dataEpoch
+                || current.getSourceKind() != incomingSource
+                || current.getConfidence() != incomingConfidence
+                || current.getLightSourceKind() != incomingLight;
     }
 
 

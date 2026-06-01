@@ -44,6 +44,10 @@ public class IrisVoxyRenderPipelineData {
     public IrisVoxyRenderPipeline thePipeline;
     public final int[] opaqueDrawTargets;
     public final int[] translucentDrawTargets;
+    private final IrisRenderingPipeline irisPipeline;
+    private final RenderTargets renderTargets;
+    private final int[] opaqueTargetIds;
+    private final int[] translucentTargetIds;
     private final String opaquePatch;
     private final String translucentPatch;
     private final StructLayout uniforms;
@@ -57,7 +61,11 @@ public class IrisVoxyRenderPipelineData {
     public final boolean deferTranslucency;
     public boolean skipShaderDepthHackFix;
 
-    private IrisVoxyRenderPipelineData(IrisShaderPatch patch, int[] opaqueDrawTargets, int[] translucentDrawTargets, StructLayout uniformSet, Runnable blendingSetup, ImageSet imageSet, SSBOSet ssboSet) {
+    private IrisVoxyRenderPipelineData(IrisRenderingPipeline irisPipeline, RenderTargets renderTargets, IrisShaderPatch patch, int[] opaqueTargetIds, int[] translucentTargetIds, int[] opaqueDrawTargets, int[] translucentDrawTargets, StructLayout uniformSet, Runnable blendingSetup, ImageSet imageSet, SSBOSet ssboSet) {
+        this.irisPipeline = irisPipeline;
+        this.renderTargets = renderTargets;
+        this.opaqueTargetIds = opaqueTargetIds;
+        this.translucentTargetIds = translucentTargetIds;
         this.opaqueDrawTargets = opaqueDrawTargets;
         this.translucentDrawTargets = translucentDrawTargets;
         this.opaquePatch = patch.getPatchOpaqueSource();
@@ -104,13 +112,36 @@ public class IrisVoxyRenderPipelineData {
 
         var ssboSet = createSSBOLayouts(patch.getSSBOs(), ssboHolder);
 
-        var opaqueDrawTargets = getDrawBuffers(patch.getOpqaueTargets(), ipipe.getFlippedAfterPrepare(), ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets());
-        var translucentDrawTargets = getDrawBuffers(patch.getTranslucentTargets(), ipipe.getFlippedAfterPrepare(), ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets());
+        var renderTargets = ((IrisRenderingPipelineAccessor)ipipe).getRenderTargets();
+        var opaqueTargetIds = patch.getOpqaueTargets().clone();
+        var translucentTargetIds = patch.getTranslucentTargets().clone();
+        var opaqueDrawTargets = getDrawBuffers(opaqueTargetIds, ipipe.getFlippedAfterPrepare(), renderTargets);
+        var translucentDrawTargets = getDrawBuffers(translucentTargetIds, ipipe.getFlippedAfterPrepare(), renderTargets);
 
 
 
         //TODO: need to transform the string patch with the uniform decleration aswell as sampler declerations
-        return new IrisVoxyRenderPipelineData(patch, opaqueDrawTargets, translucentDrawTargets, uniforms, patch.createBlendSetup(), imageSet, ssboSet);
+        return new IrisVoxyRenderPipelineData(ipipe, renderTargets, patch, opaqueTargetIds, translucentTargetIds, opaqueDrawTargets, translucentDrawTargets, uniforms, patch.createBlendSetup(), imageSet, ssboSet);
+    }
+
+    public boolean refreshDrawTargets() {
+        var flippedAfterPrepare = this.irisPipeline.getFlippedAfterPrepare();
+        boolean opaqueChanged = refreshDrawBuffers(this.opaqueTargetIds, this.opaqueDrawTargets, flippedAfterPrepare, this.renderTargets);
+        boolean translucentChanged = refreshDrawBuffers(this.translucentTargetIds, this.translucentDrawTargets, flippedAfterPrepare, this.renderTargets);
+        return opaqueChanged || translucentChanged;
+    }
+
+    private static boolean refreshDrawBuffers(int[] targets, int[] targetTextures, ImmutableSet<Integer> stageWritesToAlt, RenderTargets rt) {
+        boolean changed = false;
+        for (int i = 0; i < targets.length; i++) {
+            RenderTarget target = rt.getOrCreate(targets[i]);
+            int textureId = stageWritesToAlt.contains(targets[i]) ? target.getAltTexture() : target.getMainTexture();
+            if (targetTextures[i] != textureId) {
+                targetTextures[i] = textureId;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     private static int[] getDrawBuffers(int[] targets, ImmutableSet<Integer> stageWritesToAlt, RenderTargets rt) {
@@ -485,7 +516,9 @@ public class IrisVoxyRenderPipelineData {
         FunctionReturn cachedReturn = new FunctionReturn();
         ((CustomUniformsAccessor)cu).getLocationMap().get(patch).object2IntEntrySet().forEach(entry-> {
             if (!seenUniforms.add(entry.getKey().getName())) {
-                Logger.warn("Skipping duplicate cached uniform registration: ", entry.getKey().getName());
+                if (!entry.getKey().getName().startsWith("vx")) {
+                    Logger.warn("Skipping duplicate cached uniform registration: ", entry.getKey().getName());
+                }
                 return;
             }
             uniforms.add(new UniformWritingHolder(entry.getKey().getName(), Type.convert(entry.getKey().getType()),offset->createWriter(offset, cachedReturn, entry.getKey())));

@@ -1,10 +1,10 @@
 package me.cortex.voxy.client.iris;
 
-import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.debug.RenderStateDiagnostics;
 import me.cortex.voxy.client.core.rendering.RenderStateSnapshot;
 import me.cortex.voxy.common.Logger;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
 import net.irisshaders.iris.gl.uniform.UniformHolder;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
@@ -95,7 +95,7 @@ public class VoxyUniforms {
     public static int getRenderDistance() {
         RenderStateSnapshot snapshot = getSnapshot();
         if (snapshot.sequence() == 0) {
-            return Math.round(VoxyConfig.CONFIG.sectionRenderDistance * 32);
+            return VoxyHandoffPolicy.visualTerrainDistanceChunks();
         }
         return Math.round(snapshot.sectionRenderDistance() * 32);
     }
@@ -118,7 +118,7 @@ public class VoxyUniforms {
                     .uniform1f(PER_FRAME, "dhNearPlane", ()->16)//Presently hardcoded in voxy
                     .uniform1f(PER_FRAME, "dhFarPlane", ()->16*3000)//Presently hardcoded in voxy
 
-                    .uniform1i(PER_FRAME, "dhRenderDistance", ()->Math.round(VoxyConfig.CONFIG.sectionRenderDistance*32*16))//In blocks
+                    .uniform1i(PER_FRAME, "dhRenderDistance", VoxyHandoffPolicy::visualTerrainDistanceBlocks)//In blocks
                     .uniformMatrix(PER_FRAME, "dhProjection", VoxyUniforms::getProjection)
                     .uniformMatrix(PER_FRAME, "dhProjectionInverse", VoxyUniforms::getProjectionInverse)
                     .uniformMatrix(PER_FRAME, "dhPreviousProjection", VoxyUniforms::getPreviousProjection);

@@ -5,6 +5,7 @@ class SingleNodeRequest {
     private int mesh;
     private byte childExistence;
     private int setMsk;
+    private long stateEpoch;
 
     SingleNodeRequest(long nodePos) {
         this.nodePos = nodePos;
@@ -44,5 +45,13 @@ class SingleNodeRequest {
     }
     public boolean hasMeshSet() {
         return (this.setMsk&1)!=0;
+    }
+
+    public void setStateEpoch(long stateEpoch) {
+        this.stateEpoch = stateEpoch;
+    }
+
+    public long getStateEpoch() {
+        return this.stateEpoch;
     }
 }

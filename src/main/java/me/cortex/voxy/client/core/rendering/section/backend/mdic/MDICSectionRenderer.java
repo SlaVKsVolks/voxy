@@ -4,6 +4,7 @@ package me.cortex.voxy.client.core.rendering.section.backend.mdic;
 import me.cortex.voxy.client.RenderStatistics;
 import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.debug.VoxyGpuAttribution;
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlVertexArray;
@@ -18,6 +19,8 @@ import me.cortex.voxy.client.core.rendering.util.LightMapHelper;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
+import me.cortex.voxy.client.sodium.provider.VoxyProviderRenderList;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainPass;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
 import net.minecraft.client.Minecraft;
@@ -25,6 +28,7 @@ import net.minecraft.core.Direction;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryUtil;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.lwjgl.opengl.ARBIndirectParameters.GL_PARAMETER_BUFFER_ARB;
@@ -33,7 +37,9 @@ import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL15.GL_ELEMENT_ARRAY_BUFFER;
 import static org.lwjgl.opengl.GL15.glBindBuffer;
 import static org.lwjgl.opengl.GL30.glBindBufferBase;
+import static org.lwjgl.opengl.GL30.glBindFramebuffer;
 import static org.lwjgl.opengl.GL30.glBindVertexArray;
+import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
 import static org.lwjgl.opengl.GL31.GL_UNIFORM_BUFFER;
 import static org.lwjgl.opengl.GL33.glBindSampler;
 import static org.lwjgl.opengl.GL40C.GL_DRAW_INDIRECT_BUFFER;
@@ -52,7 +58,9 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     private static final int TRANSLUCENT_OFFSET = OPAQUE_DRAW_COUNT;//in draw calls
     private static final int TEMPORAL_OFFSET = TRANSLUCENT_OFFSET+TRANSLUCENT_DRAW_COUNT;//in draw calls
     private static final int STATISTICS_BUFFER_BINDING = 8;
+    private static final int PROVIDER_RENDER_LIST_BUFFER_BINDING = 9;
     private final Shader terrainShader;
+    private final Shader diagnosticTerrainShader;
     private final Shader translucentTerrainShader;
 
     private final Shader commandGenShader = Shader.make()
@@ -60,6 +68,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             .define("TEMPORAL_OFFSET", TEMPORAL_OFFSET)
 
             .define("TRANSLUCENT_DISTANCE_BUFFER_BINDING", 7)
+            .define("PROVIDER_RENDER_LIST_BUFFER_BINDING", PROVIDER_RENDER_LIST_BUFFER_BINDING)
 
             .defineIf("HAS_STATISTICS", RenderStatistics.enabled)
             .defineIf("STATISTICS_BUFFER_BINDING", RenderStatistics.enabled, STATISTICS_BUFFER_BINDING)
@@ -94,11 +103,19 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
     //Statistics
     private final GlBuffer statisticsBuffer = new GlBuffer(1024).zero();
+    private final GlBuffer providerRenderList;
+    private boolean providerRenderListEnabled;
+    private long providerRenderListEpoch;
+    private long providerRenderListSectionCount;
+    private int[] providerRenderListMeshIds = new int[0];
+    private VoxyTerrainPass providerRenderListPass = VoxyTerrainPass.DEBUG;
+    private Runnable providerRenderListStaleSkipCallback = () -> {};
 
     private final AbstractRenderPipeline pipeline;
     public MDICSectionRenderer(AbstractRenderPipeline pipeline, ModelStore modelStore, BasicSectionGeometryData geometryData) {
         super(pipeline.properties, modelStore, geometryData);
         this.pipeline = pipeline;
+        this.providerRenderList = new GlBuffer(((long) geometryData.getMaxSectionCount() + 3L) * 4L).zero();
         //The pipeline can be used to transform the renderer in abstract ways
 
         String vertex = ShaderLoader.parse("voxy:lod/gl46/quads3.vert");
@@ -127,6 +144,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
 
         //TODO: find a more robust/nicer way todo this
         this.terrainShader = tryCompilePatchedOrNormal(builder, opaqueFrag, frag);
+        this.diagnosticTerrainShader = tryCompilePatchedOrNormal(builder.clone().define("VOXY_ATTRIBUTION_ID_OUTPUT"), frag, frag);
 
         String translucentFrag = pipeline.patchTranslucentShader(this, frag);
         translucentFrag = translucentFrag==null?frag:translucentFrag;
@@ -191,9 +209,14 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(this.properties.closerEqualDepthCompare());
-        this.terrainShader.bind();
+        boolean attributionIdPass = VoxyGpuAttribution.isDiagnosticIdPassActive();
+        (attributionIdPass ? this.diagnosticTerrainShader : this.terrainShader).bind();
         glBindVertexArray(GlVertexArray.STATIC_VAO);//Needs to be before binding
-        this.pipeline.setupAndBindOpaque(viewport);
+        if (attributionIdPass) {
+            glBindFramebuffer(GL_FRAMEBUFFER, VoxyGpuAttribution.diagnosticFramebufferId());
+        } else {
+            this.pipeline.setupAndBindOpaque(viewport);
+        }
         this.bindRenderingBuffers(viewport);
 
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);//Barrier everything is needed
@@ -202,7 +225,13 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         if (VoxyClient.getOcclusionDebugState()==3) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         }
+        if (attributionIdPass) {
+            VoxyGpuAttribution.beginSectionRendererDraw(maxDrawCount, this.geometryManager.getSectionCount());
+        }
         glMultiDrawElementsIndirectCountARB(GL_TRIANGLES, GL_UNSIGNED_SHORT, indirectOffset, drawCountOffset, maxDrawCount, 0);
+        if (attributionIdPass) {
+            VoxyGpuAttribution.endSectionRendererDraw(viewport);
+        }
         if (VoxyClient.getOcclusionDebugState()==3) {
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         }
@@ -220,10 +249,18 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     @Override
     public void renderOpaque(MDICViewport viewport) {
         if (this.geometryManager.getSectionCount() == 0) return;
+        if (this.providerRenderListEnabled && viewport.providerRenderListEpochForDrawCalls != this.providerRenderListEpoch) {
+            viewport.drawCountCallBuffer.zeroRange(0, 1024);
+            this.providerRenderListStaleSkipCallback.run();
+            return;
+        }
 
         this.uploadUniformBuffer(viewport);
 
-        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(this.geometryManager.getSectionCount()*4.4+128), OPAQUE_DRAW_COUNT));
+        int sectionCount = this.providerRenderListEnabled
+                ? (int) Math.min(Integer.MAX_VALUE, this.providerRenderListSectionCount)
+                : this.geometryManager.getSectionCount();
+        this.renderTerrain(viewport, 0, 4*3, Math.min((int)(sectionCount*4.4+128), OPAQUE_DRAW_COUNT));
     }
 
     @Override
@@ -258,6 +295,10 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     @Override
     public void buildDrawCalls(MDICViewport viewport) {
         if (this.geometryManager.getSectionCount() == 0) return;
+        if (this.providerRenderListEnabled) {
+            this.buildProviderRenderListDrawCalls(viewport);
+            return;
+        }
         this.uploadUniformBuffer(viewport);
         //Can do a sneeky trick, since the sectionRenderList is a list to things to render, it invokes the culler
         // which only marks visible sections
@@ -314,6 +355,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, viewport.indirectLookupBuffer.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, viewport.positionScratchBuffer.id);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, this.distanceCountBuffer.id);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, PROVIDER_RENDER_LIST_BUFFER_BINDING, this.providerRenderList.id);
 
             if (RenderStatistics.enabled) {
                 this.statisticsBuffer.zero();
@@ -360,7 +402,41 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
             glDispatchComputeIndirect(0);
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
         }
+        viewport.providerRenderListEpochForDrawCalls = this.providerRenderListEpoch;
 
+    }
+
+    private void buildProviderRenderListDrawCalls(MDICViewport viewport) {
+        this.uploadUniformBuffer(viewport);
+        viewport.drawCountCallBuffer.zeroRange(0, 1024);
+        this.distanceCountBuffer.zeroRange(0, 1024*4);
+        if (this.providerRenderListSectionCount <= 0) {
+            viewport.providerRenderListEpochForDrawCalls = this.providerRenderListEpoch;
+            return;
+        }
+
+        GPUTiming.INSTANCE.marker("PCG");
+        this.commandGenShader.bind();
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, this.uniform.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, viewport.drawCallBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, viewport.drawCountCallBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, this.geometryManager.getMetadataBuffer().id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, viewport.visibilityBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, viewport.indirectLookupBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, viewport.positionScratchBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, this.distanceCountBuffer.id);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, PROVIDER_RENDER_LIST_BUFFER_BINDING, this.providerRenderList.id);
+
+        if (RenderStatistics.enabled) {
+            this.statisticsBuffer.zero();
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, STATISTICS_BUFFER_BINDING, this.statisticsBuffer.id);
+        }
+
+        int groups = (int) Math.max(1L, (this.providerRenderListSectionCount + 127L) / 128L);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        glDispatchCompute(groups, 1, 1);
+        glMemoryBarrier(GL_COMMAND_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
+        viewport.providerRenderListEpochForDrawCalls = this.providerRenderListEpoch;
     }
 
     @Override
@@ -385,6 +461,8 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
     public void free() {
         this.uniform.free();
         this.distanceCountBuffer.free();
+        this.providerRenderList.free();
+        this.diagnosticTerrainShader.free();
         this.translucentTerrainShader.free();
         this.terrainShader.free();
         this.commandGenShader.free();
@@ -393,5 +471,73 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         this.translucentGenShader.free();
         this.prefixSumShader.free();
         this.statisticsBuffer.free();
+    }
+
+    @Override
+    public void setProviderRenderList(VoxyProviderRenderList renderList) {
+        VoxyProviderRenderList safeList = renderList == null
+                ? VoxyProviderRenderList.empty(VoxyTerrainPass.DEBUG, this.providerRenderListEpoch + 1, "missing_provider_render_list")
+                : renderList;
+        int[] safeMeshIds = safeList.meshIds();
+        Arrays.sort(safeMeshIds);
+        if (this.providerRenderListEnabled
+                && this.providerRenderListEpoch == safeList.epoch()
+                && this.providerRenderListPass == safeList.pass()
+                && Arrays.equals(this.providerRenderListMeshIds, safeMeshIds)) {
+            return;
+        }
+        this.providerRenderListEnabled = true;
+        this.providerRenderListPass = safeList.pass();
+        this.providerRenderListMeshIds = safeMeshIds;
+        this.providerRenderListEpoch = safeList.epoch();
+        this.providerRenderListSectionCount = safeMeshIds.length;
+        this.uploadProviderRenderList(true, safeList.pass(), safeMeshIds);
+    }
+
+    @Override
+    public void clearProviderRenderList() {
+        if (!this.providerRenderListEnabled) {
+            return;
+        }
+        this.providerRenderListEnabled = false;
+        this.providerRenderListPass = VoxyTerrainPass.DEBUG;
+        this.providerRenderListMeshIds = new int[0];
+        this.providerRenderListSectionCount = 0;
+        this.providerRenderListEpoch++;
+        this.uploadProviderRenderList(false, VoxyTerrainPass.DEBUG, this.providerRenderListMeshIds);
+    }
+
+    @Override
+    public void setProviderRenderListStaleSkipCallback(Runnable callback) {
+        this.providerRenderListStaleSkipCallback = callback == null ? () -> {} : callback;
+    }
+
+    private void uploadProviderRenderList(boolean enabled, VoxyTerrainPass pass, int[] meshIds) {
+        long size = this.providerRenderList.size();
+        long ptr = UploadStream.INSTANCE.upload(this.providerRenderList, 0, size);
+        MemoryUtil.memSet(ptr, 0, size);
+        MemoryUtil.memPutInt(ptr, enabled ? 1 : 0);
+        MemoryUtil.memPutInt(ptr + 4L, enabled ? meshIds.length : 0);
+        MemoryUtil.memPutInt(ptr + 8L, enabled ? providerRenderListPassMask(pass) : 0);
+        if (enabled) {
+            int maxListCount = (int) ((size / 4L) - 3L);
+            int listCount = Math.min(meshIds.length, maxListCount);
+            MemoryUtil.memPutInt(ptr + 4L, listCount);
+            for (int i = 0; i < listCount; i++) {
+                int meshId = meshIds[i];
+                if (meshId >= 0) {
+                    MemoryUtil.memPutInt(ptr + 12L + ((long) i * 4L), meshId);
+                }
+            }
+        }
+        UploadStream.INSTANCE.commit();
+    }
+
+    private static int providerRenderListPassMask(VoxyTerrainPass pass) {
+        return switch (pass) {
+            case SOLID -> 1;
+            case CUTOUT -> 1 << 1;
+            case TRANSLUCENT, FLUID, DEBUG -> 0;
+        };
     }
 }

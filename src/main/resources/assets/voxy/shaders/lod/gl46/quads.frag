@@ -186,6 +186,11 @@ void main() {
     #endif
 
     #ifndef PATCHED_SHADER
+    #ifdef VOXY_ATTRIBUTION_ID_OUTPUT
+    outColour = vec4(0.0, 1.0, 0.0, 1.0);
+    return;
+    #endif
+
     colour = computeColour(texPos, colour);
     outColour = colour;
 

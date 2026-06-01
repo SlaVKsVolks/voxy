@@ -1,5 +1,6 @@
 package me.cortex.voxy.common.thread;
 
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.Pair;
 
 import java.util.ArrayList;
@@ -15,6 +16,9 @@ public class UnifiedServiceThreadPool {
     private final ThreadGroup dedicatedPool;
     private final List<Thread> threads = new ArrayList<>();
     private int threadId = 0;
+    private int targetThreadCount = 0;
+    private int retireRequests = 0;
+    private boolean shutdownRequested = false;
 
     public UnifiedServiceThreadPool() {
         this.dedicatedPool = new ThreadGroup("Voxy Dedicated Service");
@@ -24,21 +28,28 @@ public class UnifiedServiceThreadPool {
         this.selfBlock = this.groupSemaphore.createBlock();
     }
 
-    private final void release(int i) {this.groupSemaphore.pooledRelease(i);}
+    private final void release(int i) {
+        this.groupSemaphore.pooledRelease(i);
+        this.ensureTargetWorkerCount();
+    }
 
     public boolean setNumThreads(int threads) {
+        if (threads < 0) {
+            throw new IllegalArgumentException("Thread count < 0");
+        }
         synchronized (this.threads) {
+            if (this.shutdownRequested) {
+                throw new IllegalStateException("Cannot resize a shut down Voxy worker pool");
+            }
+            this.targetThreadCount = threads;
             int diff = threads - this.threads.size();
             if (diff==0) return false;//Already correct
             if (diff<0) {//Remove threads
+                this.retireRequests += -diff;
                 this.selfBlock.release(-diff);
             } else {//Add threads
                 for (int i = 0; i < diff; i++) {
-                    var t = new Thread(this.dedicatedPool, this::workerThread, "Dedicated Voxy Worker #"+(this.threadId++));
-                    t.setPriority(3);
-                    t.setDaemon(true);
-                    this.threads.add(t);
-                    t.start();
+                    this.startWorkerLocked();
                 }
             }
         }
@@ -54,18 +65,82 @@ public class UnifiedServiceThreadPool {
         }
     }
 
-    private void workerThread() {
-        this.selfBlock.acquire();//This is stupid but it works
-
-        //We are exiting, remove self from list of threads
+    private void ensureTargetWorkerCount() {
         synchronized (this.threads) {
-            this.threads.remove(Thread.currentThread());
+            if (this.shutdownRequested) {
+                return;
+            }
+            int missing = this.targetThreadCount - this.threads.size();
+            if (missing <= 0) {
+                return;
+            }
+            Logger.warn("Voxy worker pool below target; respawning missing workers. target=", this.targetThreadCount,
+                    " current=", this.threads.size(), " missing=", missing);
+            for (int i = 0; i < missing; i++) {
+                this.startWorkerLocked();
+            }
+        }
+    }
+
+    private void startWorkerLocked() {
+        var t = new Thread(this.dedicatedPool, this::workerThread, "Dedicated Voxy Worker #" + (this.threadId++));
+        t.setPriority(3);
+        t.setDaemon(true);
+        this.threads.add(t);
+        t.start();
+    }
+
+    private void workerThread() {
+        boolean removed = false;
+        Throwable failure = null;
+        try {
+            while (true) {
+                this.selfBlock.acquire();
+
+                synchronized (this.threads) {
+                    if (this.shutdownRequested || (this.retireRequests > 0 && this.threads.size() > this.targetThreadCount)) {
+                        if (this.retireRequests > 0) {
+                            this.retireRequests--;
+                        }
+                        Logger.info("Dedicated Voxy worker retiring: ", Thread.currentThread().getName(),
+                                " remaining=", this.threads.size() - 1,
+                                " target=", this.targetThreadCount,
+                                " retire_requests=", this.retireRequests);
+                        this.threads.remove(Thread.currentThread());
+                        removed = true;
+                        this.threads.notifyAll();
+                        return;
+                    }
+                }
+            }
+        } catch (Throwable throwable) {
+            failure = throwable;
+            Logger.error("Dedicated Voxy worker failed: ", Thread.currentThread().getName(), throwable);
+        } finally {
+            if (!removed) {
+                synchronized (this.threads) {
+                    Logger.warn("Dedicated Voxy worker exited without an explicit retire request: ",
+                            Thread.currentThread().getName(),
+                            " remaining=", Math.max(0, this.threads.size() - 1),
+                            " target=", this.targetThreadCount,
+                            " retire_requests=", this.retireRequests,
+                            " shutdown=", this.shutdownRequested,
+                            " failure=", failure == null ? "none" : failure.getClass().getName());
+                    this.threads.remove(Thread.currentThread());
+                    this.threads.notifyAll();
+                }
+            }
         }
     }
 
     public void shutdown() {
         this.serviceManager.shutdown();
-        this.selfBlock.release(10000);
+        synchronized (this.threads) {
+            this.shutdownRequested = true;
+            this.targetThreadCount = 0;
+            this.retireRequests += this.threads.size();
+            this.selfBlock.release(Math.max(1, this.threads.size()));
+        }
         while (true) {
             synchronized (this.threads) {
                 if (this.threads.isEmpty()) {
@@ -79,6 +154,24 @@ public class UnifiedServiceThreadPool {
             }
         }
         this.selfBlock.free();
+    }
+
+    public int getThreadCount() {
+        synchronized (this.threads) {
+            return this.threads.size();
+        }
+    }
+
+    public int getTargetThreadCount() {
+        synchronized (this.threads) {
+            return this.targetThreadCount;
+        }
+    }
+
+    public int getRetireRequests() {
+        synchronized (this.threads) {
+            return this.retireRequests;
+        }
     }
 
 

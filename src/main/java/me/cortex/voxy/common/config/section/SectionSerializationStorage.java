@@ -5,6 +5,7 @@ import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
+import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.ThreadLocalMemoryBuffer;
 import me.cortex.voxy.common.world.SaveLoadSystem3;
 import me.cortex.voxy.common.world.WorldSection;
@@ -25,7 +26,15 @@ public class SectionSerializationStorage extends SectionStorage {
     private static final ThreadLocalMemoryBuffer MEMORY_CACHE = new ThreadLocalMemoryBuffer(BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
 
     public int loadSection(WorldSection into) {
-        var data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
+        MemoryBuffer data;
+        try {
+            data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
+        } catch (RuntimeException exception) {
+            this.backend.deleteSectionData(into.key);
+            Arrays.fill(into._unsafeGetRawDataArray(), Mapper.AIR);
+            Logger.error("Section " + into.lvl + ", " + into.x + ", " + into.y + ", " + into.z + " failed during load, removing", exception);
+            return -1;
+        }
         if (data != null) {
             if (!SaveLoadSystem3.deserialize(into, data)) {
                 this.backend.deleteSectionData(into.key);

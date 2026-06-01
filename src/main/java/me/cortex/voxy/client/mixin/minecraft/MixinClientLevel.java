@@ -20,6 +20,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.lighting.LayerLightSectionStorage;
 
 import java.util.function.Supplier;
 
@@ -79,8 +80,10 @@ public abstract class MixinClientLevel {
 
             var blp = lp.getLayerListener(LightLayer.BLOCK).getDataLayerData(csp);
             var slp = lp.getLayerListener(LightLayer.SKY).getDataLayerData(csp);
+            LayerLightSectionStorage.SectionType skySectionType = lp.getDebugSectionType(LightLayer.SKY, csp);
+            int fallbackSkyLight = VoxelIngestService.fallbackSkyLightFor(skySectionType);
 
-            boolean queued = VoxelIngestService.rawIngest(wi, section, csp.x(), csp.y(), csp.z(), blp == null ? null : blp.copy(), slp == null ? null : slp.copy());
+            boolean queued = VoxelIngestService.rawIngest(wi.getOrCreateEngine(), wi, section, csp.x(), csp.y(), csp.z(), blp == null ? null : blp.copy(), slp == null ? null : slp.copy(), fallbackSkyLight);
             RenderCorrectnessDiagnostics.ingest("block_update", csp.x(), csp.y(), csp.z(), section.hasOnlyAir(), queued, queued ? "queued" : "raw_ingest_rejected");
         } else {
             RenderCorrectnessDiagnostics.ingest("block_update", csp.x(), csp.y(), csp.z(), updated.isAir(), false, "missing_chunk");

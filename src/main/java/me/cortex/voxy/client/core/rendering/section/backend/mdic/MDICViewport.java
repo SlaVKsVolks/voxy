@@ -11,6 +11,7 @@ public class MDICViewport extends Viewport<MDICViewport> {
     public final GlBuffer positionScratchBuffer  = new GlBuffer(8*400000).zero();//400k positions
     public final GlBuffer indirectLookupBuffer = new GlBuffer(HierarchicalOcclusionTraverser.MAX_QUEUE_SIZE*4+4);//In theory, this could be global/not unique to the viewport
     public final GlBuffer visibilityBuffer;
+    public long providerRenderListEpochForDrawCalls = Long.MIN_VALUE;
 
     public MDICViewport(RenderProperties properties, int maxSectionCount) {
         super(properties);

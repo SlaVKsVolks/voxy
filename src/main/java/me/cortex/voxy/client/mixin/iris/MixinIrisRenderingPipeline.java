@@ -33,7 +33,11 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = ((IGetVoxyPatchData) programSet).voxy$getPatchData();
             if (this.patchData == null) {
-                Logger.info("IrisRenderingPipeline ctor: patchData=NULL for ProgramSet=", programSet.getClass().getName());
+                Logger.warn(
+                        "IrisRenderingPipeline ctor: patchData=NULL for ProgramSet=",
+                        programSet.getClass().getName(),
+                        ". Voxy shader-aware pipeline cannot be built unless the active shaderpack provides Voxy patch data."
+                );
             } else {
                 Logger.info("IrisRenderingPipeline ctor: patchData=READY uniforms=", this.patchData.getUniformList().length);
             }
@@ -55,7 +59,7 @@ public class MixinIrisRenderingPipeline implements IGetVoxyPatchData, IGetIrisVo
                 throw t;
             }
         } else {
-            Logger.warn("IrisRenderingPipeline ctor: skipping Voxy pipeline build because patchData is null");
+            Logger.warn("IrisRenderingPipeline ctor: skipping Voxy pipeline build because patchData is null; this is shaderpack support missing, not a uniform bind failure.");
         }
     }
 

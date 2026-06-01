@@ -3,12 +3,17 @@ package me.cortex.voxy.client;
 import me.cortex.voxy.client.compat.FlashbackCompat;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.RenderResourceReuse;
+import me.cortex.voxy.client.serverlod.ClientServerLodSync;
 import me.cortex.voxy.client.mixin.sodium.AccessorSodiumWorldRenderer;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.StorageConfigUtil;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.Serialization;
 import me.cortex.voxy.common.config.compressors.ZSTDCompressor;
+import me.cortex.voxy.common.config.section.CompactVlcpSectionStorage;
+import me.cortex.voxy.common.config.section.OverlaySectionStorage;
+import me.cortex.voxy.common.config.section.ServerLodCacheSectionStorage;
+import me.cortex.voxy.common.config.section.ServerLodPublishingSectionStorage;
 import me.cortex.voxy.common.config.section.SectionSerializationStorage;
 import me.cortex.voxy.common.config.section.SectionStorage;
 import me.cortex.voxy.common.config.section.SectionStorageConfig;
@@ -47,7 +52,10 @@ public class VoxyClientInstance extends VoxyInstance {
             if (swr != null) {
                 var rsm = ((AccessorSodiumWorldRenderer) swr).getRenderSectionManager();
                 if (rsm != null) {
-                    this.setNumThreads(Math.max(1, target - rsm.getBuilder().getTotalThreadCount()));
+                    int sodiumThreads = rsm.getBuilder().getTotalThreadCount();
+                    int sharedTarget = Math.max(1, target - sodiumThreads);
+                    int responsiveFloor = Math.min(target, 2);
+                    this.setNumThreads(Math.max(sharedTarget, responsiveFloor));
                     return;
                 }
             }
@@ -67,7 +75,26 @@ public class VoxyClientInstance extends VoxyInstance {
         ctx.setProperty(ConfigBuildCtx.WORLD_IDENTIFIER, identifier.getWorldId());
         ctx.setProperty(ConfigBuildCtx.PLAYER_UUID, Minecraft.getInstance().getUser().getProfileId().toString().replace(':','-'));
         ctx.pushPath(ConfigBuildCtx.DEFAULT_STORAGE_PATH);
-        return this.config.sectionStorageConfig.build(ctx);
+        SectionStorage storage = this.config.sectionStorageConfig.build(ctx);
+        String dimension = identifier.key.location().toString();
+        if (Minecraft.getInstance().getSingleplayerServer() != null || Boolean.getBoolean("voxy.serverLodPublishSections")) {
+            storage = new ServerLodPublishingSectionStorage(storage, dimension);
+        }
+        SectionStorage fallback;
+        Path serverCacheRoot = ClientServerLodSync.cacheRoot();
+        Logger.info("Mounting synced Voxy server LoD cache overlay: " + serverCacheRoot);
+        fallback = new ServerLodCacheSectionStorage(serverCacheRoot, dimension);
+        Path compactPath = getCompactVlcpPath();
+        if (compactPath != null && Files.exists(compactPath)) {
+            Logger.info("Mounting compact Voxy VLCP overlay: " + compactPath);
+            SectionStorage compactStorage = new CompactVlcpSectionStorage(compactPath);
+            fallback = fallback == null ? compactStorage : new OverlaySectionStorage(fallback, compactStorage);
+        }
+        if (fallback != null) {
+            storage = new OverlaySectionStorage(storage, fallback);
+        }
+        ClientServerLodSync.requestSyncWhenReady("world storage mounted");
+        return storage;
     }
 
     public Path getStorageBasePath() {
@@ -124,5 +151,17 @@ public class VoxyClientInstance extends VoxyInstance {
             }
         }
         return basePath.toAbsolutePath();
+    }
+
+    private Path getCompactVlcpPath() {
+        String override = System.getProperty("voxy.compactVlcpPath", "").trim();
+        if (!override.isEmpty()) {
+            return Path.of(override).toAbsolutePath().normalize();
+        }
+        Path defaultPath = this.basePath.resolve("surface_lods.vlcp");
+        if (Files.exists(defaultPath)) {
+            return defaultPath;
+        }
+        return null;
     }
 }

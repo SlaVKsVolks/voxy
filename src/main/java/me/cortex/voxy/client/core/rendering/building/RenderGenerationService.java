@@ -4,6 +4,12 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import me.cortex.voxy.client.core.model.IdNotYetComputedException;
 import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
+import me.cortex.voxy.client.sodium.provider.VoxyBoundaryPriorityQueue;
+import me.cortex.voxy.client.sodium.provider.VoxyFarTerrainProvider;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainFailureReason;
+import me.cortex.voxy.client.sodium.provider.VoxyTerrainTileValidator;
+import me.cortex.voxy.common.VoxyHandoffPolicy;
+import me.cortex.voxy.common.debug.RenderCorrectnessDiagnostics;
 import me.cortex.voxy.common.thread.Service;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.util.Pair;
@@ -16,6 +22,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.StampedLock;
 import java.util.function.Consumer;
+import java.util.function.LongUnaryOperator;
 
 //TODO: Add a render cache
 
@@ -34,22 +41,64 @@ public class RenderGenerationService {
         boolean hasDoneModelRequestOuter;
         int attempts;
         int addin;
+        long requestEpoch = BuiltSection.NO_REQUEST_EPOCH;
         long priority = Long.MIN_VALUE;
+        int priorityLane;
         private BuildTask(long position) {
             this.position = position;
+            this.priorityLane = computePriorityLane(position);
         }
-        private void updatePriority() {
+        private void updatePriority(double centerX, double centerY, double centerZ) {
             int unique = COUNTER.incrementAndGet();
             int lvl = WorldEngine.MAX_LOD_LAYER-WorldEngine.getLevel(this.position);
             lvl = Math.min(lvl, 3);//Make the 2 highest quality have equal priority
-            this.priority = (((lvl*3L + Math.min(this.attempts, 3))*2 + this.addin) <<32) + Integer.toUnsignedLong(unique);
+            long coarsePriority = (lvl*3L + Math.min(this.attempts, 3))*2 + this.addin;
+            long distancePriority = computeDistancePriority(this.position, centerX, centerY, centerZ);
+            this.priorityLane = computePriorityLane(this.position);
+            this.priority = ((long) this.priorityLane << 61)
+                    | (coarsePriority << 32)
+                    | (distancePriority << 16)
+                    | (Integer.toUnsignedLong(unique) & 0xFFFFL);
             this.addin = 0;
+        }
+
+        private static int computePriorityLane(long position) {
+            int level = WorldEngine.getLevel(position);
+            int sectionX = WorldEngine.getX(position);
+            int sectionZ = WorldEngine.getZ(position);
+            if (VoxyHandoffPolicy.isBoundaryRingSection(level, sectionX, sectionZ)) {
+                return VoxyBoundaryPriorityQueue.LANE_BOUNDARY;
+            }
+            double sizeChunks = 2.0D * (1 << level);
+            double sectionCenterX = (sectionX + 0.5D) * sizeChunks;
+            double sectionCenterZ = (sectionZ + 0.5D) * sizeChunks;
+            double handoff = VoxyHandoffPolicy.handoffStartChunks();
+            double distanceFromHandoff = Math.abs(Math.hypot(sectionCenterX, sectionCenterZ) - handoff);
+            if (distanceFromHandoff <= Math.max(4.0D, VoxyHandoffPolicy.overlapChunks() + 2.0D)) {
+                return VoxyBoundaryPriorityQueue.LANE_NEAR_REFINEMENT;
+            }
+            return VoxyBoundaryPriorityQueue.LANE_FAR_REFINEMENT;
+        }
+
+        private static long computeDistancePriority(long position, double centerX, double centerY, double centerZ) {
+            int level = WorldEngine.getLevel(position);
+            double sectionSize = 32.0D * (1 << level);
+            double nodeCenterX = (WorldEngine.getX(position) + 0.5D) * sectionSize;
+            double nodeCenterY = (WorldEngine.getY(position) + 0.5D) * sectionSize;
+            double nodeCenterZ = (WorldEngine.getZ(position) + 0.5D) * sectionSize;
+            double dx = nodeCenterX - centerX;
+            double dy = (nodeCenterY - centerY) * 0.5D;
+            double dz = nodeCenterZ - centerZ;
+            long bucket = (long) Math.min(0xFFFFL, Math.sqrt(dx*dx + dy*dy + dz*dz) / Math.max(1.0D, sectionSize));
+            return bucket;
         }
     }
 
     private final AtomicInteger holdingSectionCount = new AtomicInteger();//Used to limit section holding
 
     private final AtomicInteger taskQueueCount = new AtomicInteger();
+    private final AtomicInteger boundaryQueueCount = new AtomicInteger();
+    private final AtomicInteger farQueueCount = new AtomicInteger();
     private final PriorityBlockingQueue<BuildTask> taskQueue = new PriorityBlockingQueue<>(5000, (a,b)-> Long.compareUnsigned(a.priority, b.priority));
     private final StampedLock taskMapLock = new StampedLock();
     private final Long2ObjectOpenHashMap<BuildTask> taskMap = new Long2ObjectOpenHashMap<>(5000);
@@ -57,7 +106,12 @@ public class RenderGenerationService {
     private final WorldEngine world;
     private final ModelBakerySubsystem modelBakery;
     private Consumer<BuiltSection> resultConsumer;
+    private volatile LongUnaryOperator requestEpochProvider = position -> BuiltSection.NO_REQUEST_EPOCH;
+    private volatile VoxyFarTerrainProvider farTerrainProvider;
     private final boolean emitMeshlets;
+    private volatile double priorityCenterX;
+    private volatile double priorityCenterY;
+    private volatile double priorityCenterZ;
 
     private final Service service;
 
@@ -84,6 +138,15 @@ public class RenderGenerationService {
 
     public void setResultConsumer(Consumer<BuiltSection> consumer) {
         this.resultConsumer = consumer;
+    }
+
+    public void setRequestEpochProvider(LongUnaryOperator provider) {
+        this.requestEpochProvider = provider == null ? position -> BuiltSection.NO_REQUEST_EPOCH : provider;
+    }
+
+    public void setFarTerrainProvider(VoxyFarTerrainProvider provider) {
+        this.farTerrainProvider = provider;
+        this.recordProviderQueueDepths();
     }
 
     //NOTE: the biomes are always fully populated/kept up to date
@@ -126,10 +189,19 @@ public class RenderGenerationService {
         return WorldEngine.getLevel(pos) > 2;
     }
 
+    private static boolean isRequiredVoxyBoundarySection(long position) {
+        int level = WorldEngine.getLevel(position);
+        int sectionX = WorldEngine.getX(position);
+        int sectionZ = WorldEngine.getZ(position);
+        return VoxyHandoffPolicy.isRequiredVoxyCoverageSection(level, sectionX, sectionZ);
+    }
+
     //TODO: add a generated render data cache
     private void processJob(RenderDataFactory factory, IntOpenHashSet seenMissedIds) {
         BuildTask task = this.taskQueue.poll();
         this.taskQueueCount.decrementAndGet();
+        this.decrementLane(task);
+        this.recordProviderQueueDepths();
 
         //long time = BuiltSection.getTime();
         boolean shouldFreeSection = true;
@@ -154,17 +226,78 @@ public class RenderGenerationService {
 
         if (section == null) {
             if (this.resultConsumer != null) {
-                this.resultConsumer.accept(BuiltSection.empty(task.position));
+                this.resultConsumer.accept(BuiltSection.empty(task.position, task.requestEpoch));
             }
             return;
         }
         section.assertNotFree();
         BuiltSection mesh = null;
 
+        VoxyTerrainFailureReason sourceValidation = this.farTerrainProvider == null
+                ? VoxyTerrainFailureReason.NONE
+                : VoxyTerrainTileValidator.validateSource(section);
+        if (sourceValidation != VoxyTerrainFailureReason.NONE) {
+            MESH_FAILED_COUNTER.incrementAndGet();
+            if (this.farTerrainProvider != null) {
+                this.farTerrainProvider.recordMaterialRejected(sourceValidation);
+                if (task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY
+                        && isRequiredVoxyBoundarySection(task.position)) {
+                    this.farTerrainProvider.recordBoundaryRejectedSection(task.position);
+                }
+                RenderCorrectnessDiagnostics.call(
+                        "render_generation",
+                        "boundary_section",
+                        "rejected_source",
+                        "pos=" + WorldEngine.pprintPos(task.position) + ",reason=" + sourceValidation);
+            }
+            if (this.resultConsumer != null) {
+                if (task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY
+                        && isRequiredVoxyBoundarySection(task.position)) {
+                    this.resultConsumer.accept(BuiltSection.empty(task.position, task.requestEpoch));
+                } else {
+                    this.resultConsumer.accept(BuiltSection.emptyWithChildren(task.position, task.requestEpoch, section.getNonEmptyChildren()));
+                }
+            }
+            if (task.section != null) {
+                this.holdingSectionCount.decrementAndGet();
+            }
+            section.release();
+            return;
+        }
+        if (this.farTerrainProvider != null && task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY) {
+            this.farTerrainProvider.recordBoundarySource(
+                    section.getSourceKind(),
+                    section.getLightSourceKind(),
+                    section.getConfidence()
+            );
+        }
 
         try {
             mesh = factory.generateMesh(section);
+            VoxyTerrainFailureReason meshValidation = factory.getLastProviderValidationFailure();
+            if (meshValidation != VoxyTerrainFailureReason.NONE
+                    && meshValidation != VoxyTerrainFailureReason.MISSING_MODEL_FALLBACK
+                    && this.farTerrainProvider != null) {
+                this.farTerrainProvider.recordMaterialRejected(meshValidation);
+                if (task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY
+                        && meshValidation != VoxyTerrainFailureReason.RENDER_PASS_UNSUPPORTED
+                        && isRequiredVoxyBoundarySection(task.position)) {
+                    this.farTerrainProvider.recordBoundaryRejectedSection(task.position);
+                    RenderCorrectnessDiagnostics.call(
+                            "render_generation",
+                            "boundary_required_section",
+                            "rejected_mesh",
+                            "pos=" + WorldEngine.pprintPos(task.position) + ",reason=" + meshValidation);
+                }
+            }
         } catch (IdNotYetComputedException e) {
+            if (task.attempts >= 3) {
+                MESH_FAILED_COUNTER.incrementAndGet();
+                if (this.farTerrainProvider != null) {
+                    this.farTerrainProvider.recordMaterialRejected(VoxyTerrainFailureReason.MISSING_MODEL_FALLBACK);
+                }
+                mesh = BuiltSection.emptyWithChildren(task.position, task.requestEpoch, section.getNonEmptyChildren());
+            } else {
             {
                 long stamp = this.taskMapLock.writeLock();
                 BuildTask other = this.taskMap.putIfAbsent(task.position, task);
@@ -249,13 +382,16 @@ public class RenderGenerationService {
                     shouldFreeSection = false;
                 }
 
-                task.updatePriority();
+                task.updatePriority(this.priorityCenterX, this.priorityCenterY, this.priorityCenterZ);
                 this.taskQueue.add(task);
                 this.taskQueueCount.incrementAndGet();
+                this.incrementLane(task);
+                this.recordProviderQueueDepths();
 
                 if (this.service.isLive()) {//Only execute if were not dead
                     this.service.execute();//Since we put in queue, release permit
                 }
+            }
             }
         }
 
@@ -267,6 +403,7 @@ public class RenderGenerationService {
         }
 
         if (mesh != null) {//If the mesh is null it means it didnt finish, so dont submit
+            mesh = mesh.withRequestEpoch(task.requestEpoch);
             if (this.resultConsumer != null) {
                 this.resultConsumer.accept(mesh);
             } else {
@@ -286,15 +423,48 @@ public class RenderGenerationService {
                 isOurs[0] = true;
                 return new BuildTask(p);
             });
+        long requestEpoch = this.requestEpochProvider.applyAsLong(pos);
+        task.requestEpoch = requestEpoch;
         this.taskMapLock.unlockWrite(stamp);
 
         if (isOurs[0]) {//If its not ours we dont care about it
             //Set priority and insert into queue and execute
-            task.updatePriority();
+            task.updatePriority(this.priorityCenterX, this.priorityCenterY, this.priorityCenterZ);
             this.taskQueue.add(task);
             this.taskQueueCount.incrementAndGet();
+            this.incrementLane(task);
+            this.recordProviderQueueDepths();
             this.service.execute();
         }
+    }
+
+    private void incrementLane(BuildTask task) {
+        if (task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY) {
+            this.boundaryQueueCount.incrementAndGet();
+        } else {
+            this.farQueueCount.incrementAndGet();
+        }
+    }
+
+    private void decrementLane(BuildTask task) {
+        if (task.priorityLane == VoxyBoundaryPriorityQueue.LANE_BOUNDARY) {
+            this.boundaryQueueCount.decrementAndGet();
+        } else {
+            this.farQueueCount.decrementAndGet();
+        }
+    }
+
+    private void recordProviderQueueDepths() {
+        VoxyFarTerrainProvider provider = this.farTerrainProvider;
+        if (provider != null) {
+            provider.recordQueueDepths(this.boundaryQueueCount.get(), this.farQueueCount.get());
+        }
+    }
+
+    public void setPriorityCenter(double x, double y, double z) {
+        this.priorityCenterX = x;
+        this.priorityCenterY = y;
+        this.priorityCenterZ = z;
     }
 
     /*
@@ -312,6 +482,7 @@ public class RenderGenerationService {
                 long stamp = this.taskMapLock.writeLock();
                 for (int j = 0; j < i; j++) {
                     var task = this.taskQueue.remove();
+                    this.decrementLane(task);
                     if (task.section != null) {
                         task.section.release();
                         this.holdingSectionCount.decrementAndGet();
@@ -332,6 +503,7 @@ public class RenderGenerationService {
         while (!this.taskQueue.isEmpty()) {
             var task = this.taskQueue.remove();
             this.taskQueueCount.decrementAndGet();
+            this.decrementLane(task);
             if (task.section != null) {
                 task.section.release();
                 this.holdingSectionCount.decrementAndGet();

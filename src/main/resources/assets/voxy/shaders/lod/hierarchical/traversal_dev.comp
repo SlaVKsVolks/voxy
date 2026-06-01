@@ -76,6 +76,14 @@ void enqueueChildren(in UnpackedNode node) {
 
 void enqueueSelfForRender(in UnpackedNode node) {
     //printf("render %d@[%d,%d,%d]", node.lodLevel, node.pos.x, node.pos.y, node.pos.z);
+    #if MIN_RENDER_DISTANCE_SQ > 0
+    vec3 nPos = vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos;
+    float scale = 1<<(node.lodLevel+5);
+    vec3 close = mix(mix(vec3(0), nPos, greaterThan(nPos, vec3(0))), nPos+scale, lessThan(nPos+scale, vec3(0)));
+    if ((close.x*close.x + close.z*close.z) < MIN_RENDER_DISTANCE_SQ) {
+        return;
+    }
+    #endif
     if (renderQueueIndex < renderQueueMaxSize) {
         lastRenderFrame[getId(node)] = frameId;
         if (!isEmptyMesh(node)) {
@@ -115,6 +123,34 @@ bool isWithinRenderDistance(in UnpackedNode node) {
     return xzDist <= renderDistance;
 }
 
+bool shouldBackgroundRefine(in UnpackedNode node) {
+    if (node.lodLevel == 0) {
+        return false;
+    }
+
+    vec3 close = closestPointToCamera(node);
+    float xzDist = close.x*close.x+close.z*close.z;
+
+    // Visible traversal is intentionally frustum/Hi-Z driven, but relying on
+    // visibility for all refinement leaves newly-revealed or behind-camera
+    // terrain stuck as coarse parent nodes. Keep a bounded refinement bubble
+    // around the camera so turning/zooming does not expose oversized LoD blocks.
+    const float BACKGROUND_REFINE_RADIUS_BLOCKS = 4096.0f;
+    float budgetSq = BACKGROUND_REFINE_RADIUS_BLOCKS * BACKGROUND_REFINE_RADIUS_BLOCKS;
+    if (renderDistance >= 0.0f) {
+        budgetSq = min(budgetSq, renderDistance);
+    }
+    return xzDist <= budgetSq;
+}
+
+void refineNodeWithoutRendering(in UnpackedNode node) {
+    if (hasChildren(node)) {
+        enqueueChildren(node);
+    } else {
+        addRequest(node);
+    }
+}
+
 
 void traverse(in UnpackedNode node) {
     #ifdef HAS_STATISTICS
@@ -126,7 +162,9 @@ void traverse(in UnpackedNode node) {
     //debugDumpNode(node);
 
     if (outsideFrustum() || isCulledByHiz()) {
-        //printf("culled");
+        if (shouldBackgroundRefine(node)) {
+            refineNodeWithoutRendering(node);
+        }
     } else {
         //It is visible, TODO: maybe do a more detailed hiz test? (or make it so that )
 
@@ -138,17 +176,10 @@ void traverse(in UnpackedNode node) {
             } else {
                 //printf("B");
                 addRequest(node);
-                //TODO: use self mesh (is error state if it doesnt have one since all leaf nodes should have a mesh)
-                // Basicly guarenteed to have a mesh, if it doesnt it is very very bad and incorect since its a violation of the graph properties
-                // that all leaf nodes must contain a mesh
-
-                bool shouldRenderSelf = renderDistance<0.0f;
-                if (!shouldRenderSelf) {
-                    vec3 far = furthestPointToCamera(node);
-                    shouldRenderSelf = (far.x*far.x+far.z*far.z+(16*16*16))<=renderDistance;//the +16*16 is to add some buffer room
-                }
-
-                if (shouldRenderSelf) {
+                // Child refinement is missing. Keep the parent visible as a fallback even
+                // when the parent spans past the render-distance edge; culling by far corner
+                // creates a visible empty band between vanilla chunks and Voxy LoDs.
+                if (hasMesh(node)) {
                     enqueueSelfForRender(node);
                 }
             }

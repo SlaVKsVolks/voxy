@@ -1,6 +1,7 @@
 package me.cortex.voxy.common.world.other;
 
 import com.mojang.serialization.Dynamic;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.IMappingStorage;
@@ -63,6 +64,9 @@ public class Mapper {
     private Consumer<BiomeEntry> newBiomeCallback;
     public Mapper(IMappingStorage storage) {
         this.storage = storage;
+        if (Boolean.getBoolean("voxy.offlineImportMinimalMapper")) {
+            return;
+        }
         //Insert air since its a special entry (index 0)
         var airEntry = new StateEntry(0, Blocks.AIR.defaultBlockState());
         this.block2stateEntry.put(airEntry.state, airEntry);
@@ -139,8 +143,10 @@ public class Mapper {
             } else if (entryType == BIOME_TYPE) {
                 var bentry = BiomeEntry.deserialize(id, entry.getValue());
                 bentries.add(bentry);
-                if (this.biome2biomeEntry.put(bentry.biome, bentry) != null) {
-                    throw new IllegalStateException("Multiple mappings for biome entry");
+                var oldEntry = this.biome2biomeEntry.putIfAbsent(bentry.biome, bentry);
+                if (oldEntry != null) {
+                    Logger.warn("Multiple mappings for biome entry, preserving numeric id " + bentry.id
+                            + " and using first id " + oldEntry.id + " for future writes: " + bentry.biome);
                 }
             } else {
                 throw new IllegalStateException("Unknown entryType");
@@ -163,23 +169,191 @@ public class Mapper {
         }
 
         //Insert into the arrays
+        int[] filledBlockMappingIds = new int[1];
+        int[] firstFilledBlockMappingId = {-1};
+        int[] lastFilledBlockMappingId = {-1};
         sentries.stream().sorted(Comparator.comparing(a->a.id)).forEach(entry -> {
-            if (this.blockId2stateEntry.size() != entry.id) {
-                throw new IllegalStateException("Block entry not ordered");
+            while (this.blockId2stateEntry.size() < entry.id) {
+                int missingId = this.blockId2stateEntry.size();
+                if (firstFilledBlockMappingId[0] == -1) {
+                    firstFilledBlockMappingId[0] = missingId;
+                }
+                lastFilledBlockMappingId[0] = missingId;
+                filledBlockMappingIds[0]++;
+                this.blockId2stateEntry.add(new StateEntry(missingId, Blocks.AIR.defaultBlockState()));
             }
-            this.blockId2stateEntry.add(entry);
+            if (this.blockId2stateEntry.size() == entry.id) {
+                this.blockId2stateEntry.add(entry);
+            } else {
+                Logger.warn("Ignoring duplicate Voxy block mapping id " + entry.id
+                        + " after sparse mapping repair");
+            }
         });
 
+        if (filledBlockMappingIds[0] > 0) {
+            Logger.warn("Filled " + filledBlockMappingIds[0] + " missing Voxy block mapping ids "
+                    + firstFilledBlockMappingId[0] + ".." + lastFilledBlockMappingId[0]
+                    + " while loading sparse/corrupt mapping storage");
+        }
+
+        int[] filledBiomeMappingIds = new int[1];
+        int[] firstFilledBiomeMappingId = {-1};
+        int[] lastFilledBiomeMappingId = {-1};
         bentries.stream().sorted(Comparator.comparing(a->a.id)).forEach(entry -> {
-            if (this.biomeId2biomeEntry.size() != entry.id) {
-                throw new IllegalStateException("Biome entry not ordered. got " + entry.biome + " with id " + entry.id + " expected id " + this.biomeId2biomeEntry.size());
+            while (this.biomeId2biomeEntry.size() < entry.id) {
+                int missingId = this.biomeId2biomeEntry.size();
+                if (firstFilledBiomeMappingId[0] == -1) {
+                    firstFilledBiomeMappingId[0] = missingId;
+                }
+                lastFilledBiomeMappingId[0] = missingId;
+                filledBiomeMappingIds[0]++;
+                this.biomeId2biomeEntry.add(new BiomeEntry(missingId, "minecraft:plains"));
             }
-            this.biomeId2biomeEntry.add(entry);
+            if (this.biomeId2biomeEntry.size() == entry.id) {
+                this.biomeId2biomeEntry.add(entry);
+            } else {
+                Logger.warn("Ignoring duplicate Voxy biome mapping id " + entry.id
+                        + " after sparse mapping repair");
+            }
         });
+        if (filledBiomeMappingIds[0] > 0) {
+            Logger.warn("Filled " + filledBiomeMappingIds[0] + " missing Voxy biome mapping ids "
+                    + firstFilledBiomeMappingId[0] + ".." + lastFilledBiomeMappingId[0]
+                    + " while loading sparse/corrupt mapping storage");
+        }
 
         if (forceResave[0]) {
             Logger.warn("Forced state resave triggered");
             this.forceResaveStates();
+        }
+    }
+
+    public void importMappings(Int2ObjectOpenHashMap<byte[]> mappings) {
+        if (mappings == null || mappings.isEmpty()) {
+            return;
+        }
+        List<StateEntry> sentries = new ArrayList<>();
+        List<BiomeEntry> bentries = new ArrayList<>();
+        boolean[] forceResave = new boolean[1];
+
+        for (var entry : mappings.int2ObjectEntrySet()) {
+            int entryType = entry.getIntKey() >>> 30;
+            int id = entry.getIntKey() & ((1 << 30) - 1);
+            try {
+                if (entryType == BLOCK_STATE_TYPE) {
+                    var sentry = StateEntry.deserialize(id, entry.getValue(), forceResave);
+                    if (!sentry.state.isAir() || sentry.id == 0) {
+                        sentries.add(sentry);
+                    }
+                } else if (entryType == BIOME_TYPE) {
+                    bentries.add(BiomeEntry.deserialize(id, entry.getValue()));
+                }
+            } catch (RuntimeException exception) {
+                Logger.warn("Ignoring invalid imported Voxy server LoD mapping id " + id + ": " + exception.getMessage());
+            }
+        }
+
+        sentries.stream().sorted(Comparator.comparing(entry -> entry.id)).forEach(this::importStateEntry);
+        bentries.stream().sorted(Comparator.comparing(entry -> entry.id)).forEach(this::importBiomeEntry);
+    }
+
+    private void importStateEntry(StateEntry entry) {
+        this.blockLock.lock();
+        boolean added = false;
+        try {
+            if (entry.id < this.blockId2stateEntry.size()) {
+                var existing = this.blockId2stateEntry.get(entry.id);
+                if (entry.id > 0 && existing.state.isAir() && !entry.state.isAir()) {
+                    this.blockId2stateEntry.set(entry.id, entry);
+                    this.block2stateEntry.putIfAbsent(entry.state, entry);
+                    added = true;
+                }
+                return;
+            }
+            this.fillImportedStateMappingGap(entry.id);
+            this.blockId2stateEntry.add(entry);
+            this.block2stateEntry.putIfAbsent(entry.state, entry);
+            added = true;
+        } finally {
+            this.blockLock.unlock();
+        }
+        if (added && this.newStateCallback != null) {
+            this.newStateCallback.accept(entry);
+        }
+    }
+
+    private void importBiomeEntry(BiomeEntry entry) {
+        this.biomeLock.lock();
+        boolean added = false;
+        try {
+            if (entry.id < this.biomeId2biomeEntry.size()) {
+                var existing = this.biomeId2biomeEntry.get(entry.id);
+                if (entry.id > 0 && "minecraft:plains".equals(existing.biome) && !existing.biome.equals(entry.biome)) {
+                    this.biomeId2biomeEntry.set(entry.id, entry);
+                    this.biome2biomeEntry.putIfAbsent(entry.biome, entry);
+                    added = true;
+                }
+                return;
+            }
+            this.fillImportedBiomeMappingGap(entry.id);
+            this.biomeId2biomeEntry.add(entry);
+            this.biome2biomeEntry.putIfAbsent(entry.biome, entry);
+            added = true;
+        } finally {
+            this.biomeLock.unlock();
+        }
+        if (added && this.newBiomeCallback != null) {
+            this.newBiomeCallback.accept(entry);
+        }
+    }
+
+    private void fillImportedStateMappingGap(int targetId) {
+        int firstMissing = this.blockId2stateEntry.size();
+        while (this.blockId2stateEntry.size() < targetId) {
+            int missingId = this.blockId2stateEntry.size();
+            this.blockId2stateEntry.add(new StateEntry(missingId, Blocks.AIR.defaultBlockState()));
+        }
+        if (this.blockId2stateEntry.size() != firstMissing) {
+            Logger.warn("Filled imported Voxy server LoD block mapping gap "
+                    + firstMissing + ".." + (this.blockId2stateEntry.size() - 1)
+                    + " before imported id " + targetId);
+        }
+    }
+
+    private void fillImportedBiomeMappingGap(int targetId) {
+        int firstMissing = this.biomeId2biomeEntry.size();
+        while (this.biomeId2biomeEntry.size() < targetId) {
+            int missingId = this.biomeId2biomeEntry.size();
+            this.biomeId2biomeEntry.add(new BiomeEntry(missingId, "minecraft:plains"));
+        }
+        if (this.biomeId2biomeEntry.size() != firstMissing) {
+            Logger.warn("Filled imported Voxy server LoD biome mapping gap "
+                    + firstMissing + ".." + (this.biomeId2biomeEntry.size() - 1)
+                    + " before imported id " + targetId);
+        }
+    }
+
+    public void ensureImportedMappingCoverage(int maxBlockId, int maxBiomeId) {
+        if (maxBlockId >= 0) {
+            this.blockLock.lock();
+            try {
+                if (maxBlockId >= this.blockId2stateEntry.size()) {
+                    this.fillImportedStateMappingGap(maxBlockId + 1);
+                }
+            } finally {
+                this.blockLock.unlock();
+            }
+        }
+
+        if (maxBiomeId >= 0) {
+            this.biomeLock.lock();
+            try {
+                if (maxBiomeId >= this.biomeId2biomeEntry.size()) {
+                    this.fillImportedBiomeMappingGap(maxBiomeId + 1);
+                }
+            } finally {
+                this.biomeLock.unlock();
+            }
         }
     }
 
@@ -316,7 +490,7 @@ public class Mapper {
 
     public void forceResaveStates() {
         var blocks = new ArrayList<>(this.block2stateEntry.values());
-        var biomes = new ArrayList<>(this.biome2biomeEntry.values());
+        var biomes = new ArrayList<>(this.biomeId2biomeEntry);
 
 
         for (var entry : blocks) {
