@@ -46,6 +46,7 @@ public final class VoxyHandoffPolicyTest {
         assertParentMeshArtifactGuardsDefaultOn();
         assertSparseServerLodMappingsAreImported();
         assertServerAuthoredNeoForgeContractIsExposed();
+        assertServerLodCacheSynthesizesUsefulParentsByDefault();
         assertSodiumCompatibleProviderBoundaryExists();
         assertSodiumCompatibleProviderIsRuntimeAuthority();
         assertProviderIsProductionRenderAuthority();
@@ -416,6 +417,22 @@ public final class VoxyHandoffPolicyTest {
                 Path.of("src/main/java/me/cortex/voxy/commonImpl/serverlod/ServerAuthoredLodBuilder.java"),
                 "ServerLodNeoForgeContract",
                 "Minecraft-authored LoD builder must declare the server-thread NeoForge contract it follows");
+    }
+
+    private static void assertServerLodCacheSynthesizesUsefulParentsByDefault() {
+        Path cacheStorage = Path.of("src/main/java/me/cortex/voxy/common/config/section/ServerLodCacheSectionStorage.java");
+        requireSourceContains(
+                cacheStorage,
+                "System.getProperty(\"voxy.serverLodCacheSynthesizeMissingParents\", \"true\")",
+                "Server LoD cache must synthesize missing parents by default so boundary fallback coverage can fill gaps");
+        requireSourceContains(
+                cacheStorage,
+                "containsNonAir",
+                "Server LoD cache parent synthesis must detect exact leaf children with voxel data but no child metadata");
+        requireSourceContains(
+                cacheStorage,
+                "child.getNonEmptyChildren() != 0 || containsNonAir(child)",
+                "Server LoD cache parent synthesis must mark children useful when they contain non-air voxel data");
     }
 
     private static void assertSodiumCompatibleProviderBoundaryExists() {

@@ -21,7 +21,7 @@ import java.util.function.LongConsumer;
 
 public final class ServerLodCacheSectionStorage extends SectionStorage {
     private static final boolean SYNTHESIZE_MISSING_PARENTS = Boolean.parseBoolean(
-            System.getProperty("voxy.serverLodCacheSynthesizeMissingParents", "false"));
+            System.getProperty("voxy.serverLodCacheSynthesizeMissingParents", "true"));
     private static final int SYNTHESIS_DEPTH = Math.max(
             0,
             Integer.getInteger("voxy.serverLodCacheSynthesisDepth", WorldEngine.MAX_LOD_LAYER));
@@ -97,7 +97,7 @@ public final class ServerLodCacheSectionStorage extends SectionStorage {
                     if (this.loadExact(child, false) || this.synthesizeFromChildren(child, remainingDepth - 1)) {
                         children[childIndex] = child;
                         anyChild = true;
-                        if (child.getNonEmptyChildren() != 0) {
+                        if (child.getNonEmptyChildren() != 0 || containsNonAir(child)) {
                             childMask = (byte) (childMask | (1 << childIndex));
                         }
                     }
@@ -133,6 +133,15 @@ public final class ServerLodCacheSectionStorage extends SectionStorage {
                 .setSource(VoxelizedSection.SourceKind.REAL_CHUNK, VoxelizedSection.Confidence.HIGH)
                 .setLightSourceKind(VoxelizedSection.LightSourceKind.REAL_LIGHT));
         return childMask != 0;
+    }
+
+    private static boolean containsNonAir(WorldSection section) {
+        for (long value : section._unsafeGetRawDataArray()) {
+            if (value != Mapper.AIR) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static long childSample(WorldSection[] children, int parentX, int parentY, int parentZ, int bitX, int bitY, int bitZ) {
