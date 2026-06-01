@@ -38,6 +38,7 @@ public final class VoxyHandoffPolicyTest {
         assertTopLevelRadius(512, 17);
         assertDistanceStateCanBeInitializedBeforeFirstCameraTick();
         assertRequiredVoxyCoverageOnlyExistsBeyondVanilla();
+        assertHighCameraRequiresVerticalVoxyCoverage();
         assertParentFallbackShaderDoesNotUseFarCornerRenderDistanceGate();
         assertHandoffRootsIncludeExactLevelZeroSections();
         assertRenderPathsUseMergedDistancePolicy();
@@ -158,6 +159,18 @@ public final class VoxyHandoffPolicyTest {
         }
     }
 
+    private static void assertHighCameraRequiresVerticalVoxyCoverage() {
+        VoxyHandoffPolicy.updateCamera(0.0D, 363.0D, 0.0D, 64, 8, 2, "voxy_merged");
+        if (!VoxyHandoffPolicy.isRequiredVoxyCoverageSection(0, 0, 2, 0)) {
+            throw new AssertionError("High camera views must require Voxy coverage for terrain vertically outside vanilla's near-field coverage");
+        }
+
+        VoxyHandoffPolicy.updateCamera(0.0D, 80.0D, 0.0D, 64, 8, 2, "voxy_merged");
+        if (VoxyHandoffPolicy.isRequiredVoxyCoverageSection(0, 0, 2, 0)) {
+            throw new AssertionError("Ground-level views must keep the near field owned by vanilla/Sodium");
+        }
+    }
+
     private static void assertParentFallbackShaderDoesNotUseFarCornerRenderDistanceGate() {
         Path shader = Path.of("src/main/resources/assets/voxy/shaders/lod/hierarchical/traversal_dev.comp");
         String source;
@@ -209,6 +222,10 @@ public final class VoxyHandoffPolicyTest {
                 + "                        Minecraft.getInstance().options.getEffectiveRenderDistance()")) {
             throw new AssertionError("Render-frame camera updates must not overwrite merged distance policy with vanilla render distance");
         }
+        requireSourceContains(
+                Path.of("src/main/java/me/cortex/voxy/client/core/VoxyRenderSystem.java"),
+                "viewport.cameraY",
+                "Provider handoff distance must include camera Y so high-camera views cannot create a vertical near-field hole");
         rejectSourceContains(
                 Path.of("src/main/java/me/cortex/voxy/client/core/rendering/hierachical/HierarchicalOcclusionTraverser.java"),
                 "sectionRenderDistance",

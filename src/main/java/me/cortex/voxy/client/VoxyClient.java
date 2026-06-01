@@ -164,6 +164,7 @@ public class VoxyClient {
         applyMergedRenderDistancePolicy(mc);
         VoxyHandoffPolicy.updateCamera(
                 mc.gameRenderer.getMainCamera().getPosition().x,
+                mc.gameRenderer.getMainCamera().getPosition().y,
                 mc.gameRenderer.getMainCamera().getPosition().z,
                 VoxyConfig.CONFIG.isRenderingEnabled()
                         ? VoxyConfig.CONFIG.visualTerrainDistanceChunks

@@ -25,6 +25,7 @@ public final class VoxyHandoffPolicy {
     private static volatile int overlapChunks = DEFAULT_OVERLAP_CHUNKS;
     private static volatile int maxRealRenderDistanceChunks = DEFAULT_MAX_REAL_RENDER_DISTANCE_CHUNKS;
     private static volatile double cameraBlockX;
+    private static volatile double cameraBlockY;
     private static volatile double cameraBlockZ;
 
     private VoxyHandoffPolicy() {
@@ -70,7 +71,7 @@ public final class VoxyHandoffPolicy {
     }
 
     public static void updateCamera(double cameraX, double cameraZ, int vanillaRadiusChunks) {
-        updateCamera(cameraX, cameraZ, vanillaRadiusChunks, vanillaRadiusChunks, configuredOverlapChunks(), "vanilla");
+        updateCamera(cameraX, 0.0D, cameraZ, vanillaRadiusChunks, vanillaRadiusChunks, configuredOverlapChunks(), "vanilla");
     }
 
     public static void updateCamera(
@@ -81,7 +82,20 @@ public final class VoxyHandoffPolicy {
             int overlapChunks,
             String sliderMode
     ) {
+        updateCamera(cameraX, 0.0D, cameraZ, visualTerrainDistanceChunks, maxRealRenderDistanceChunks, overlapChunks, sliderMode);
+    }
+
+    public static void updateCamera(
+            double cameraX,
+            double cameraY,
+            double cameraZ,
+            int visualTerrainDistanceChunks,
+            int maxRealRenderDistanceChunks,
+            int overlapChunks,
+            String sliderMode
+    ) {
         VoxyHandoffPolicy.cameraBlockX = cameraX;
+        VoxyHandoffPolicy.cameraBlockY = cameraY;
         VoxyHandoffPolicy.cameraBlockZ = cameraZ;
         updateDistance(visualTerrainDistanceChunks, maxRealRenderDistanceChunks, overlapChunks, sliderMode);
     }
@@ -139,12 +153,16 @@ public final class VoxyHandoffPolicy {
     }
 
     public static boolean isBoundaryRingSection(WorldSection section) {
-        return isBoundaryRingSection(section.lvl, section.x, section.z);
+        return isBoundaryRingSection(section.lvl, section.x, section.y, section.z);
     }
 
     public static boolean isBoundaryRingSection(int level, int sectionX, int sectionZ) {
-        double minDistanceChunks = sectionMinDistanceChunks(level, sectionX, sectionZ);
-        double maxDistanceChunks = sectionMaxDistanceChunks(level, sectionX, sectionZ);
+        return isBoundaryRingSection(level, sectionX, 0, sectionZ);
+    }
+
+    public static boolean isBoundaryRingSection(int level, int sectionX, int sectionY, int sectionZ) {
+        double minDistanceChunks = sectionMinDistanceChunks(level, sectionX, sectionY, sectionZ);
+        double maxDistanceChunks = sectionMaxDistanceChunks(level, sectionX, sectionY, sectionZ);
         double start = handoffStartChunks;
         double end = vanillaRadiusChunks + BOUNDARY_EXTRA_CHUNKS;
         return maxDistanceChunks >= start && minDistanceChunks <= end;
@@ -155,39 +173,46 @@ public final class VoxyHandoffPolicy {
     }
 
     public static boolean isRequiredVoxyCoverageSection(int level, int sectionX, int sectionZ) {
+        return isRequiredVoxyCoverageSection(level, sectionX, 0, sectionZ);
+    }
+
+    public static boolean isRequiredVoxyCoverageSection(int level, int sectionX, int sectionY, int sectionZ) {
         if (!hasRequiredVoxyCoverageBeyondVanilla()) {
             return false;
         }
-        double minDistanceChunks = sectionMinDistanceChunks(level, sectionX, sectionZ);
-        double maxDistanceChunks = sectionMaxDistanceChunks(level, sectionX, sectionZ);
+        double minDistanceChunks = sectionMinDistanceChunks(level, sectionX, sectionY, sectionZ);
+        double maxDistanceChunks = sectionMaxDistanceChunks(level, sectionX, sectionY, sectionZ);
         return maxDistanceChunks > vanillaRadiusChunks && minDistanceChunks <= voxyLodEndChunks;
     }
 
     public static double sectionMinDistanceChunks(int level, int sectionX, int sectionZ) {
+        return sectionMinDistanceChunks(level, sectionX, 0, sectionZ);
+    }
+
+    public static double sectionMinDistanceChunks(int level, int sectionX, int sectionY, int sectionZ) {
         int sizeBlocks = 1 << (level + 5);
         double minX = (double) sectionX * sizeBlocks;
+        double minY = (double) sectionY * sizeBlocks;
         double minZ = (double) sectionZ * sizeBlocks;
         double maxX = minX + sizeBlocks;
+        double maxY = minY + sizeBlocks;
         double maxZ = minZ + sizeBlocks;
-        return Math.sqrt(squaredDistanceToAabb(cameraBlockX, cameraBlockZ, minX, minZ, maxX, maxZ)) / 16.0;
+        return Math.sqrt(squaredDistanceToAabb(cameraBlockX, cameraBlockY, cameraBlockZ, minX, minY, minZ, maxX, maxY, maxZ)) / 16.0;
     }
 
     public static double sectionMaxDistanceChunks(int level, int sectionX, int sectionZ) {
+        return sectionMaxDistanceChunks(level, sectionX, 0, sectionZ);
+    }
+
+    public static double sectionMaxDistanceChunks(int level, int sectionX, int sectionY, int sectionZ) {
         int sizeBlocks = 1 << (level + 5);
         double minX = (double) sectionX * sizeBlocks;
+        double minY = (double) sectionY * sizeBlocks;
         double minZ = (double) sectionZ * sizeBlocks;
         double maxX = minX + sizeBlocks;
+        double maxY = minY + sizeBlocks;
         double maxZ = minZ + sizeBlocks;
-        return Math.sqrt(Math.max(
-                squaredDistance(cameraBlockX, cameraBlockZ, minX, minZ),
-                Math.max(
-                        squaredDistance(cameraBlockX, cameraBlockZ, minX, maxZ),
-                        Math.max(
-                                squaredDistance(cameraBlockX, cameraBlockZ, maxX, minZ),
-                                squaredDistance(cameraBlockX, cameraBlockZ, maxX, maxZ)
-                        )
-                )
-        )) / 16.0;
+        return Math.sqrt(maxSquaredDistanceToAabb(cameraBlockX, cameraBlockY, cameraBlockZ, minX, minY, minZ, maxX, maxY, maxZ)) / 16.0;
     }
 
     public static String boundaryGapVerdict(long boundaryLoads, long boundaryParentFallbacks, long boundaryMisses) {
@@ -200,12 +225,28 @@ public final class VoxyHandoffPolicy {
         return "UNKNOWN_NO_BOUNDARY_REQUESTS";
     }
 
-    private static double squaredDistanceToAabb(double x, double z, double minX, double minZ, double maxX, double maxZ) {
+    private static double squaredDistanceToAabb(
+            double x,
+            double y,
+            double z,
+            double minX,
+            double minY,
+            double minZ,
+            double maxX,
+            double maxY,
+            double maxZ
+    ) {
         double dx = 0.0;
         if (x < minX) {
             dx = minX - x;
         } else if (x > maxX) {
             dx = x - maxX;
+        }
+        double dy = 0.0;
+        if (y < minY) {
+            dy = minY - y;
+        } else if (y > maxY) {
+            dy = y - maxY;
         }
         double dz = 0.0;
         if (z < minZ) {
@@ -213,13 +254,24 @@ public final class VoxyHandoffPolicy {
         } else if (z > maxZ) {
             dz = z - maxZ;
         }
-        return dx * dx + dz * dz;
+        return dx * dx + dy * dy + dz * dz;
     }
 
-    private static double squaredDistance(double ax, double az, double bx, double bz) {
-        double dx = ax - bx;
-        double dz = az - bz;
-        return dx * dx + dz * dz;
+    private static double maxSquaredDistanceToAabb(
+            double x,
+            double y,
+            double z,
+            double minX,
+            double minY,
+            double minZ,
+            double maxX,
+            double maxY,
+            double maxZ
+    ) {
+        double dx = Math.max(Math.abs(x - minX), Math.abs(x - maxX));
+        double dy = Math.max(Math.abs(y - minY), Math.abs(y - maxY));
+        double dz = Math.max(Math.abs(z - minZ), Math.abs(z - maxZ));
+        return dx * dx + dy * dy + dz * dz;
     }
 
     public record MergedRenderDistance(

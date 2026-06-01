@@ -798,7 +798,7 @@ public class NodeManager {
         }
         if (DROP_LEAF_PARENT_MESH_ON_REFINEMENT
                 && childExistence != 0
-                && VoxyHandoffPolicy.isBoundaryRingSection(level, WorldEngine.getX(pos), WorldEngine.getZ(pos))) {
+                && VoxyHandoffPolicy.isBoundaryRingSection(level, WorldEngine.getX(pos), WorldEngine.getY(pos), WorldEngine.getZ(pos))) {
             return this.suppressParentMesh(pos, meshId, reason + "_boundary_refinable_parent_mesh");
         }
         if (!SUPPRESS_UNREFINABLE_PARENT_MESH || childExistence != 0) {
@@ -813,9 +813,10 @@ public class NodeManager {
         }
         int level = WorldEngine.getLevel(pos);
         int sectionX = WorldEngine.getX(pos);
+        int sectionY = WorldEngine.getY(pos);
         int sectionZ = WorldEngine.getZ(pos);
-        double minSectionRadiusChunks = VoxyHandoffPolicy.sectionMinDistanceChunks(level, sectionX, sectionZ);
-        double maxSectionRadiusChunks = VoxyHandoffPolicy.sectionMaxDistanceChunks(level, sectionX, sectionZ);
+        double minSectionRadiusChunks = VoxyHandoffPolicy.sectionMinDistanceChunks(level, sectionX, sectionY, sectionZ);
+        double maxSectionRadiusChunks = VoxyHandoffPolicy.sectionMaxDistanceChunks(level, sectionX, sectionY, sectionZ);
         boolean parentFallbackAvailable = meshId != NULL_GEOMETRY_ID && meshId != EMPTY_GEOMETRY_ID;
         boolean exactLodAvailable = level == 0 && parentFallbackAvailable;
         VoxyTerrainOwnershipMap ownershipMap = new VoxyTerrainOwnershipMap(this.farTerrainProvider.snapshot());

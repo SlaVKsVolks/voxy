@@ -549,6 +549,7 @@ public class VoxyRenderSystem {
                 VoxyHandoffPolicy.MergedRenderDistance distance = VoxyMergedRenderDistance.currentDistance();
                 VoxyHandoffPolicy.updateCamera(
                         viewport.cameraX,
+                        viewport.cameraY,
                         viewport.cameraZ,
                         distance.visualTerrainDistanceChunks(),
                         distance.maxRealRenderDistanceChunks(),
@@ -705,6 +706,7 @@ public class VoxyRenderSystem {
         VoxyHandoffPolicy.MergedRenderDistance distance = VoxyMergedRenderDistance.currentDistance();
         VoxyHandoffPolicy.updateCamera(
                 viewport.cameraX,
+                viewport.cameraY,
                 viewport.cameraZ,
                 distance.visualTerrainDistanceChunks(),
                 distance.maxRealRenderDistanceChunks(),
